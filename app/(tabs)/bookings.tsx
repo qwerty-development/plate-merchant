@@ -3,25 +3,28 @@ import BookingCard from '@/components/bookings/booking-card';
 import FilterControls from '@/components/bookings/filter-controls';
 import { useRestaurant } from '@/contexts/restaurant-context';
 import { useBookingNotification } from '@/hooks/use-booking-notification';
+import { useForegroundService } from '@/hooks/use-foreground-service';
+import { usePersistentNotification } from '@/hooks/use-persistent-notification';
 import { sendLocalNotification, setBadgeCount, usePushNotifications } from '@/hooks/use-push-notifications';
 import { useRealtimeConnection } from '@/hooks/use-realtime-connection';
 import { supabase } from '@/lib/supabase';
 import { Booking, BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import endOfDay from 'date-fns/endOfDay';
-import startOfDay from 'date-fns/startOfDay';
+import { endOfDay } from 'date-fns/endOfDay';
+import { startOfDay } from 'date-fns/startOfDay';
+import * as Notifications from 'expo-notifications';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Platform,
-    RefreshControl,
-    ScrollView,
-    Text,
-    ToastAndroid,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  Text,
+  ToastAndroid,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 type DateFilter = 'today' | 'week' | 'month' | 'all' | 'custom';
@@ -31,6 +34,13 @@ export default function BookingsScreen() {
   const queryClient = useQueryClient();
   const { playSound, markBookingHandled, stopSound } = useBookingNotification();
   const { expoPushToken } = usePushNotifications();
+  const { 
+    addPendingBooking, 
+    removePendingBooking, 
+    getPendingCount,
+    isBackgroundTaskRegistered 
+  } = usePersistentNotification();
+  const { isServiceRunning } = useForegroundService(true);
   
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -41,6 +51,26 @@ export default function BookingsScreen() {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const previousPendingIdsRef = useRef<Set<string>>(new Set());
   const isInitialLoadRef = useRef(true);
+
+  // Handle notification action responses (Accept/Decline from notification)
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
+      const action = response.actionIdentifier;
+      const bookingId = response.notification.request.content.data?.bookingId as string;
+      
+      console.log('📱 Notification action:', action, 'for booking:', bookingId);
+      
+      if (!bookingId) return;
+
+      if (action === 'ACCEPT') {
+        handleAccept(bookingId);
+      } else if (action === 'DECLINE') {
+        handleDecline(bookingId);
+      }
+    });
+
+    return () => subscription.remove();
+  }, []);
 
   // Save push token to database when available
   useEffect(() => {
@@ -174,6 +204,9 @@ export default function BookingsScreen() {
         if (booking) {
           const guestName = booking.guest_name || booking.profiles?.full_name || 'Guest';
           const partySize = booking.party_size;
+          
+          // Add to persistent notification system (repeating alerts)
+          addPendingBooking(id, guestName, partySize);
           
           // Send local push notification (works when app is closed)
           sendLocalNotification(
@@ -319,6 +352,7 @@ export default function BookingsScreen() {
 
   const handleAccept = (bookingId: string) => {
     markBookingHandled(bookingId);
+    removePendingBooking(bookingId); // Stop persistent notifications
     updateBooking({ bookingId, status: 'confirmed' });
     
     // Update badge count
@@ -328,6 +362,7 @@ export default function BookingsScreen() {
 
   const handleDecline = (bookingId: string, note?: string) => {
     markBookingHandled(bookingId);
+    removePendingBooking(bookingId); // Stop persistent notifications
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
     
     // Update badge count
@@ -387,6 +422,22 @@ export default function BookingsScreen() {
             </Text>
           </View>
           <View className="flex-row gap-2 items-center">
+            {/* Background Service Indicator */}
+            {isServiceRunning && (
+              <View className="bg-green-500/30 rounded-full px-2 py-1 flex-row items-center gap-1">
+                <View className="w-2 h-2 rounded-full bg-green-400" />
+                <Text className="text-background text-xs">Service Active</Text>
+              </View>
+            )}
+
+            {/* Persistent Notifications Status */}
+            {isBackgroundTaskRegistered && (
+              <View className="bg-blue-500/30 rounded-full px-2 py-1 flex-row items-center gap-1">
+                <MaterialIcons name="notifications-active" size={12} color="#ffece2" />
+                <Text className="text-background text-xs">Alerts On</Text>
+              </View>
+            )}
+
             {/* Connection Status Indicator */}
             <TouchableOpacity
               className={`rounded-full p-2 ${isConnected ? 'bg-green-500/30' : 'bg-red-500/30'}`}
