@@ -1,5 +1,5 @@
-import differenceInSeconds from 'date-fns/differenceInSeconds';
-import format from 'date-fns/format';
+import { differenceInSeconds } from 'date-fns/differenceInSeconds';
+import { format } from 'date-fns/format';
 
 /**
  * Format date to "MMM d, yyyy" format

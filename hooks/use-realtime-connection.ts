@@ -16,8 +16,8 @@ export function useRealtimeConnection({
   const [isConnected, setIsConnected] = useState(false);
   const [lastHeartbeat, setLastHeartbeat] = useState<Date>(new Date());
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
-  const heartbeatIntervalRef = useRef<NodeJS.Timeout>();
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const cleanup = useCallback(() => {
     if (channelRef.current) {
