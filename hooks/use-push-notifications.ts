@@ -9,6 +9,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     priority: Notifications.AndroidNotificationPriority.MAX,
   }),
 });
@@ -24,8 +26,8 @@ export interface PushNotification {
 export function usePushNotifications() {
   const [expoPushToken, setExpoPushToken] = useState<string | undefined>();
   const [notification, setNotification] = useState<Notifications.Notification | undefined>();
-  const notificationListener = useRef<Notifications.Subscription>();
-  const responseListener = useRef<Notifications.Subscription>();
+  const notificationListener = useRef<Notifications.EventSubscription | undefined>(undefined);
+  const responseListener = useRef<Notifications.EventSubscription | undefined>(undefined);
 
   useEffect(() => {
     registerForPushNotificationsAsync().then(token => {
@@ -49,10 +51,10 @@ export function usePushNotifications() {
 
     return () => {
       if (notificationListener.current) {
-        Notifications.removeNotificationSubscription(notificationListener.current);
+        notificationListener.current.remove();
       }
       if (responseListener.current) {
-        Notifications.removeNotificationSubscription(responseListener.current);
+        responseListener.current.remove();
       }
     };
   }, []);
@@ -67,16 +69,45 @@ async function registerForPushNotificationsAsync() {
   let token;
 
   if (Platform.OS === 'android') {
+    // Create notification category with actions
+    await Notifications.setNotificationCategoryAsync('BOOKING_ACTION', [
+      {
+        identifier: 'ACCEPT',
+        buttonTitle: '✅ Accept',
+        options: {
+          opensAppToForeground: true,
+        },
+      },
+      {
+        identifier: 'DECLINE',
+        buttonTitle: '❌ Decline',
+        options: {
+          opensAppToForeground: true,
+        },
+      },
+    ]);
+
+    // Create CRITICAL booking alert channel
     await Notifications.setNotificationChannelAsync('booking-alerts', {
       name: 'Booking Alerts',
       importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
+      vibrationPattern: [0, 500, 200, 500, 200, 500],
       lightColor: '#792339',
-      sound: 'new_booking.wav', // Your custom sound
+      sound: 'new_booking.wav',
       enableVibrate: true,
       enableLights: true,
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       bypassDnd: true,
+      showBadge: true,
+    });
+
+    // Create a separate channel for foreground service
+    await Notifications.setNotificationChannelAsync('foreground-service', {
+      name: 'Background Service',
+      importance: Notifications.AndroidImportance.LOW,
+      sound: null,
+      enableVibrate: false,
+      showBadge: false,
     });
   }
 
