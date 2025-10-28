@@ -1,12 +1,12 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
-import endOfDay from 'date-fns/endOfDay';
-import endOfMonth from 'date-fns/endOfMonth';
-import endOfWeek from 'date-fns/endOfWeek';
-import format from 'date-fns/format';
-import startOfDay from 'date-fns/startOfDay';
-import startOfMonth from 'date-fns/startOfMonth';
-import startOfWeek from 'date-fns/startOfWeek';
+import { endOfDay } from 'date-fns/endOfDay';
+import { endOfMonth } from 'date-fns/endOfMonth';
+import { endOfWeek } from 'date-fns/endOfWeek';
+import { format } from 'date-fns/format';
+import { startOfDay } from 'date-fns/startOfDay';
+import { startOfMonth } from 'date-fns/startOfMonth';
+import { startOfWeek } from 'date-fns/startOfWeek';
 import React, { useState } from 'react';
 import { Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 

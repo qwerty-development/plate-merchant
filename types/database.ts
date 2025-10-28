@@ -5,6 +5,7 @@ export type BookingStatus =
   | 'completed'
   | 'cancelled_by_customer'
   | 'cancelled_by_restaurant'
+  | 'cancelled_by_user'
   | 'declined_by_restaurant'
   | 'no_show';
 
@@ -67,9 +68,14 @@ export interface Booking {
   dietary_notes: string[] | null;
   guest_name: string;
   guest_email: string | null;
+  guest_phone: string | null;
   confirmation_code: string;
   table_preferences: string | null;
   applied_offer_id: string | null;
+  decline_note: string | null;
+  cancellation_note: string | null;
+  declined_at: string | null;
+  cancelled_at: string | null;
   created_at: string;
   updated_at: string;
   // Joined relations
