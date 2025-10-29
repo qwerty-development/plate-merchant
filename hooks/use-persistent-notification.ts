@@ -63,6 +63,7 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async () => {
 
 /**
  * Send a persistent notification with high priority
+ * Optimized for locked screen scenarios
  */
 async function sendPersistentNotification(booking: PendingBooking) {
   try {
@@ -70,22 +71,25 @@ async function sendPersistentNotification(booking: PendingBooking) {
       content: {
         title: '🔔 URGENT: New Booking Request!',
         body: `${booking.guestName} wants to book for ${booking.partySize} ${booking.partySize === 1 ? 'guest' : 'guests'}. Tap to respond!`,
-        data: { 
+        data: {
           bookingId: booking.id,
           type: 'persistent_booking',
           timestamp: Date.now(),
+          wakeScreen: true, // Custom flag for documentation
         },
         sound: 'new_booking.wav',
         priority: Notifications.AndroidNotificationPriority.MAX,
-        vibrate: [0, 500, 200, 500, 200, 500], // Long vibration pattern
+        vibrate: [0, 1000, 500, 1000, 500, 1000], // Extra long vibration pattern for locked screen
         categoryIdentifier: 'BOOKING_ACTION',
         badge: 1,
         sticky: true, // Android - notification stays visible
         autoDismiss: false, // Android - won't auto-dismiss
+        // Note: With USE_FULL_SCREEN_INTENT permission, high priority notifications
+        // will wake the screen and show even when locked
       },
       trigger: null, // Show immediately
     });
-    
+
     console.log(`✅ Persistent notification sent for booking ${booking.id} (count: ${booking.notificationCount + 1})`);
   } catch (error) {
     console.error('❌ Error sending persistent notification:', error);
@@ -181,34 +185,38 @@ export function usePersistentNotification() {
     // Send initial notification
     await sendPersistentNotification(newBooking);
 
-    // Schedule repeating notifications every 30 seconds for the next 10 minutes
-    // This ensures notifications keep coming even if background task fails
+    // Schedule repeating notifications every 15 seconds for the next 5 minutes
+    // More frequent for better reliability on locked screen
+    // Total: 20 notifications over 5 minutes
     for (let i = 1; i <= 20; i++) {
       await Notifications.scheduleNotificationAsync({
         content: {
-          title: '🔔 URGENT: New Booking Request!',
-          body: `${guestName} is still waiting for a response! ${partySize} ${partySize === 1 ? 'guest' : 'guests'}`,
-          data: { 
+          title: i % 3 === 0 ? '⚠️ URGENT: Booking Awaiting Response!' : '🔔 URGENT: New Booking Request!',
+          body: i % 3 === 0
+            ? `ACTION REQUIRED: ${guestName} is waiting! ${partySize} ${partySize === 1 ? 'guest' : 'guests'}`
+            : `${guestName} is still waiting for a response! ${partySize} ${partySize === 1 ? 'guest' : 'guests'}`,
+          data: {
             bookingId,
             type: 'persistent_booking_repeat',
             timestamp: Date.now(),
             sequence: i,
+            wakeScreen: true,
           },
           sound: 'new_booking.wav',
           priority: Notifications.AndroidNotificationPriority.MAX,
-          vibrate: [0, 500, 200, 500],
+          vibrate: [0, 1000, 500, 1000], // Strong vibration for locked screen
           categoryIdentifier: 'BOOKING_ACTION',
           badge: 1,
           sticky: true,
           autoDismiss: false,
         },
         trigger: {
-          seconds: 30 * i, // Every 30 seconds
+          seconds: 15 * i, // Every 15 seconds (more frequent than before)
         } as Notifications.TimeIntervalTriggerInput,
       });
     }
 
-    console.log(`✅ Scheduled 20 repeating notifications for booking ${bookingId}`);
+    console.log(`✅ Scheduled 20 repeating notifications (every 15s) for booking ${bookingId}`);
   }, []);
 
   const removePendingBooking = useCallback(async (bookingId: string) => {

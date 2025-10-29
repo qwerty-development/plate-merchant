@@ -2,11 +2,17 @@ import AnalyticsCards from '@/components/bookings/analytics-cards';
 import BookingCard from '@/components/bookings/booking-card';
 import FilterControls from '@/components/bookings/filter-controls';
 import { useRestaurant } from '@/contexts/restaurant-context';
+import { useBatteryOptimization } from '@/hooks/use-battery-optimization';
 import { useBookingNotification } from '@/hooks/use-booking-notification';
+import { useCrashRecovery } from '@/hooks/use-crash-recovery';
 import { useForegroundService } from '@/hooks/use-foreground-service';
+import { usePermissionChecker } from '@/hooks/use-permission-checker';
 import { usePersistentNotification } from '@/hooks/use-persistent-notification';
 import { sendLocalNotification, setBadgeCount, usePushNotifications } from '@/hooks/use-push-notifications';
 import { useRealtimeConnection } from '@/hooks/use-realtime-connection';
+import { useRedundantSound } from '@/hooks/use-redundant-sound';
+import { useSystemHealthMonitor } from '@/hooks/use-system-health-monitor';
+import { useVisualAlert } from '@/hooks/use-visual-alert';
 import { supabase } from '@/lib/supabase';
 import { Booking, BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -24,7 +30,7 @@ import {
   Text,
   ToastAndroid,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 
 type DateFilter = 'today' | 'week' | 'month' | 'all' | 'custom';
@@ -42,6 +48,13 @@ export default function BookingsScreen() {
   } = usePersistentNotification();
   const { isServiceRunning } = useForegroundService(true);
   
+  // New bulletproof systems
+  const redundantSound = useRedundantSound();
+  const visualAlert = useVisualAlert();
+  const crashRecovery = useCrashRecovery();
+  const permissionChecker = usePermissionChecker();
+  const batteryOptimization = useBatteryOptimization();
+  
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState<DateFilter>('today');
@@ -51,6 +64,85 @@ export default function BookingsScreen() {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const previousPendingIdsRef = useRef<Set<string>>(new Set());
   const isInitialLoadRef = useRef(true);
+  
+  // Use realtime connection first to get isConnected
+  const { isConnected, lastHeartbeat, forceReconnect } = useRealtimeConnection({
+    restaurantId: restaurant?.id,
+    onBookingChange: useCallback((payload: any) => {
+      console.log('📨 Booking change detected:', payload.eventType);
+      
+      // Refetch bookings
+      queryClient.invalidateQueries({ queryKey: ['bookings'] });
+
+      // Show toast and notification for new bookings
+      if (payload.eventType === 'INSERT') {
+        const newBooking = payload.new as Booking;
+        const guestName = newBooking.guest_name || 'Guest';
+        showToast(`New booking from ${guestName} for ${newBooking.party_size} guests`);
+        
+        // Send push notification if app is in background
+        sendLocalNotification(
+          '🎉 New Booking Request!',
+          `${guestName} wants to book for ${newBooking.party_size} ${newBooking.party_size === 1 ? 'guest' : 'guests'}`,
+          { bookingId: newBooking.id, type: 'new_booking' }
+        );
+      }
+    }, [queryClient]),
+    enabled: !!restaurant?.id,
+  });
+  
+  // System health monitor (after we have isConnected)
+  const systemHealth = useSystemHealthMonitor(
+    isConnected,
+    isBackgroundTaskRegistered,
+    isServiceRunning
+  );
+
+  // Heartbeat for crash recovery
+  useEffect(() => {
+    const heartbeatInterval = setInterval(() => {
+      crashRecovery.heartbeat();
+    }, 30000); // Every 30 seconds
+
+    return () => clearInterval(heartbeatInterval);
+  }, [crashRecovery]);
+
+  // Show crash recovery message if detected
+  useEffect(() => {
+    if (crashRecovery.hasCrashed) {
+      Alert.alert(
+        '🔄 App Recovered',
+        `The app was unexpectedly closed. We've restored your session.${
+          crashRecovery.recoveredState?.pendingBookingsCount 
+            ? `\n\nYou have ${crashRecovery.recoveredState.pendingBookingsCount} pending booking(s).`
+            : ''
+        }`,
+        [
+          {
+            text: 'OK',
+            onPress: () => crashRecovery.clearCrashState(),
+          },
+        ]
+      );
+    }
+  }, [crashRecovery.hasCrashed]);
+
+  // Show permission warning
+  useEffect(() => {
+    if (permissionChecker.showPermissionWarning) {
+      Alert.alert(
+        '⚠️ Permissions Required',
+        'Notification permissions are required to receive booking alerts. Please enable them in Settings.',
+        [
+          { text: 'Later', style: 'cancel' },
+          { 
+            text: 'Enable Now', 
+            onPress: () => permissionChecker.requestPermissions(),
+          },
+        ]
+      );
+    }
+  }, [permissionChecker.showPermissionWarning]);
 
   // Handle notification action responses (Accept/Decline from notification)
   useEffect(() => {
@@ -194,10 +286,10 @@ export default function BookingsScreen() {
     if (newPendingIds.length > 0) {
       console.log('🆕 New pending bookings detected:', newPendingIds.length);
       
-      // Play sound and send notification for each new pending booking
+      // 🔥 START ALL BULLETPROOF ALERT SYSTEMS
+      // This triggers ALL redundancy layers for maximum reliability
       newPendingIds.forEach(id => {
-        console.log('🔔 Playing sound for booking:', id);
-        playSound(id);
+        console.log('🔔 Activating all alert systems for booking:', id);
         
         // Find the booking details
         const booking = bookings.find(b => b.id === id);
@@ -205,15 +297,27 @@ export default function BookingsScreen() {
           const guestName = booking.guest_name || booking.profiles?.full_name || 'Guest';
           const partySize = booking.party_size;
           
-          // Add to persistent notification system (repeating alerts)
+          // LAYER 1: Redundant sound system (3 fallback methods)
+          redundantSound.playSound(id);
+          
+          // LAYER 2: Visual alerts (flashing screen + vibration)
+          visualAlert.startAlert({
+            bookingId: id,
+            guestName,
+            partySize
+          });
+          
+          // LAYER 3: Persistent notification system (20 repeating alerts)
           addPendingBooking(id, guestName, partySize);
           
-          // Send local push notification (works when app is closed)
+          // LAYER 4: Local push notification (works when app is closed)
           sendLocalNotification(
             '🎉 New Booking Request!',
             `${guestName} wants to book for ${partySize} ${partySize === 1 ? 'guest' : 'guests'}`,
             { bookingId: id, type: 'new_booking' }
           );
+          
+          console.log('✅ All alert systems activated for booking:', id);
         }
       });
       
@@ -246,13 +350,6 @@ export default function BookingsScreen() {
       );
     }
   }, [queryClient]);
-
-  // Use realtime connection with automatic reconnection
-  const { isConnected, lastHeartbeat, forceReconnect } = useRealtimeConnection({
-    restaurantId: restaurant?.id,
-    onBookingChange: handleBookingChange,
-    enabled: !!restaurant?.id,
-  });
 
   // Filter bookings
   const filteredBookings = useMemo(() => {
@@ -351,23 +448,59 @@ export default function BookingsScreen() {
   };
 
   const handleAccept = (bookingId: string) => {
+    console.log('🛑 STOPPING ALL ALERT SYSTEMS for booking:', bookingId);
+    
+    // 🛑 STOP ALL ALERT SYSTEMS (Multiple layers for redundancy)
+    
+    // Layer 1: Original booking notification sound
     markBookingHandled(bookingId);
-    removePendingBooking(bookingId); // Stop persistent notifications
+    stopSound(); // Force stop original sound system
+    
+    // Layer 2: Persistent notifications (20 scheduled alerts)
+    removePendingBooking(bookingId);
+    
+    // Layer 3: Redundant sound system (3 fallback methods)
+    redundantSound.stopSound();
+    
+    // Layer 4: Visual alerts (flashing screen + vibration)
+    visualAlert.stopAlert(bookingId);
+    
+    // Update booking status
     updateBooking({ bookingId, status: 'confirmed' });
     
     // Update badge count
     const pendingCount = bookings.filter(b => b.status === 'pending' && b.id !== bookingId).length;
     setBadgeCount(pendingCount);
+    
+    console.log('✅ Booking accepted - All 4 alert systems stopped for:', bookingId);
   };
 
   const handleDecline = (bookingId: string, note?: string) => {
+    console.log('🛑 STOPPING ALL ALERT SYSTEMS for booking:', bookingId);
+    
+    // 🛑 STOP ALL ALERT SYSTEMS (Multiple layers for redundancy)
+    
+    // Layer 1: Original booking notification sound
     markBookingHandled(bookingId);
-    removePendingBooking(bookingId); // Stop persistent notifications
+    stopSound(); // Force stop original sound system
+    
+    // Layer 2: Persistent notifications (20 scheduled alerts)
+    removePendingBooking(bookingId);
+    
+    // Layer 3: Redundant sound system (3 fallback methods)
+    redundantSound.stopSound();
+    
+    // Layer 4: Visual alerts (flashing screen + vibration)
+    visualAlert.stopAlert(bookingId);
+    
+    // Update booking status
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
     
     // Update badge count
     const pendingCount = bookings.filter(b => b.status === 'pending' && b.id !== bookingId).length;
     setBadgeCount(pendingCount);
+    
+    console.log('✅ Booking declined - All 4 alert systems stopped for:', bookingId);
   };
 
   const handleComplete = (bookingId: string) => {
@@ -455,6 +588,60 @@ export default function BookingsScreen() {
               </View>
             </TouchableOpacity>
 
+            {/* System Health Indicator */}
+            <TouchableOpacity
+              className={`rounded-full p-2 ${systemHealth.healthStatus === 'healthy' ? 'bg-green-500/30' : systemHealth.healthStatus === 'warning' ? 'bg-yellow-500/30' : 'bg-red-500/30'}`}
+              onPress={() => {
+                console.log('💊 Health Status:', systemHealth.healthStatus);
+                console.log('🔧 Issues:', systemHealth.issues);
+                systemHealth.runHealthCheck();
+              }}
+            >
+              <View className="flex-row items-center gap-1">
+                <View 
+                  className={`w-2 h-2 rounded-full ${systemHealth.healthStatus === 'healthy' ? 'bg-green-400' : systemHealth.healthStatus === 'warning' ? 'bg-yellow-400' : 'bg-red-400'}`}
+                />
+                <MaterialIcons 
+                  name={systemHealth.healthStatus === 'healthy' ? "favorite" : "healing"} 
+                  size={16} 
+                  color="#ffece2" 
+                />
+              </View>
+            </TouchableOpacity>
+
+            {/* Crash Recovery Indicator */}
+            {crashRecovery.hasCrashed && (
+              <TouchableOpacity
+                className="bg-orange-500/30 rounded-full px-2 py-1 flex-row items-center gap-1"
+                onPress={crashRecovery.clearCrashState}
+              >
+                <MaterialIcons name="warning" size={12} color="#ffece2" />
+                <Text className="text-background text-xs">Recovered</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Permission Status Indicator */}
+            {permissionChecker.showPermissionWarning && (
+              <TouchableOpacity
+                className="bg-red-500/30 rounded-full px-2 py-1 flex-row items-center gap-1"
+                onPress={permissionChecker.requestPermissions}
+              >
+                <MaterialIcons name="lock" size={12} color="#ffece2" />
+                <Text className="text-background text-xs">Grant Perms</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Samsung/Android Setup Button */}
+            <TouchableOpacity
+              className="bg-purple-500 rounded-full p-2"
+              onPress={() => {
+                console.log('⚙️ Setup guide triggered');
+                batteryOptimization.showSetupGuide();
+              }}
+            >
+              <MaterialIcons name="settings" size={20} color="#ffece2" />
+            </TouchableOpacity>
+
             {/* Test Sound Buttons - Remove after testing */}
             <TouchableOpacity
               className="bg-green-500 rounded-full p-2"
@@ -466,11 +653,23 @@ export default function BookingsScreen() {
               <MaterialIcons name="volume-up" size={20} color="#ffece2" />
             </TouchableOpacity>
             
+            {/* EMERGENCY STOP ALL - Stops everything immediately */}
             <TouchableOpacity
               className="bg-red-500 rounded-full p-2"
               onPress={() => {
-                console.log('🛑 Manual stop sound triggered');
-                stopSound();
+                console.log('� EMERGENCY STOP ALL triggered');
+                // Stop ALL sound systems
+                stopSound(); // Original system
+                redundantSound.stopSound(); // Redundant system
+                visualAlert.stopAllAlerts(); // Visual alerts
+                // Clear all pending bookings to stop scheduled notifications
+                const allPendingIds = bookings.filter(b => b.status === 'pending').map(b => b.id);
+                allPendingIds.forEach(id => {
+                  markBookingHandled(id);
+                  removePendingBooking(id);
+                  visualAlert.stopAlert(id);
+                });
+                console.log('✅ ALL SYSTEMS STOPPED');
               }}
             >
               <MaterialIcons name="volume-off" size={20} color="#ffece2" />
