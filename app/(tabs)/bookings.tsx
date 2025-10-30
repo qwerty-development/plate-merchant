@@ -5,7 +5,10 @@ import { useRestaurant } from '@/contexts/restaurant-context';
 import { useBatteryOptimization } from '@/hooks/use-battery-optimization';
 import { useBookingNotification } from '@/hooks/use-booking-notification';
 import { useCrashRecovery } from '@/hooks/use-crash-recovery';
-import { useForegroundService } from '@/hooks/use-foreground-service';
+import { useFCMNotifications } from '@/hooks/use-fcm-notifications';
+// OLD foreground service - replaced by native implementation (Layer 5)
+// import { useForegroundService } from '@/hooks/use-foreground-service';
+import { useNativeForegroundService } from '@/hooks/use-native-foreground-service';
 import { usePermissionChecker } from '@/hooks/use-permission-checker';
 import { usePersistentNotification } from '@/hooks/use-persistent-notification';
 import { sendLocalNotification, setBadgeCount, usePushNotifications } from '@/hooks/use-push-notifications';
@@ -40,20 +43,26 @@ export default function BookingsScreen() {
   const queryClient = useQueryClient();
   const { playSound, markBookingHandled, stopSound } = useBookingNotification();
   const { expoPushToken } = usePushNotifications();
-  const { 
-    addPendingBooking, 
-    removePendingBooking, 
+  const {
+    addPendingBooking,
+    removePendingBooking,
     getPendingCount,
-    isBackgroundTaskRegistered 
+    isBackgroundTaskRegistered
   } = usePersistentNotification();
-  const { isServiceRunning } = useForegroundService(true);
-  
+
+  // OLD foreground service - replaced by native implementation below
+  // const { isServiceRunning } = useForegroundService(true);
+
   // New bulletproof systems
   const redundantSound = useRedundantSound();
   const visualAlert = useVisualAlert();
   const crashRecovery = useCrashRecovery();
   const permissionChecker = usePermissionChecker();
   const batteryOptimization = useBatteryOptimization();
+
+  // Layer 5: Native Android Foreground Service (MOST RELIABLE!)
+  const nativeForegroundService = useNativeForegroundService();
+  const fcmNotifications = useFCMNotifications();
   
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -95,7 +104,7 @@ export default function BookingsScreen() {
   const systemHealth = useSystemHealthMonitor(
     isConnected,
     isBackgroundTaskRegistered,
-    isServiceRunning
+    nativeForegroundService.isServiceRunning  // Using Layer 5 native service status
   );
 
   // Heartbeat for crash recovery
@@ -285,39 +294,47 @@ export default function BookingsScreen() {
 
     if (newPendingIds.length > 0) {
       console.log('🆕 New pending bookings detected:', newPendingIds.length);
-      
-      // 🔥 START ALL BULLETPROOF ALERT SYSTEMS
+
+      // 🔥 START ALL 5 BULLETPROOF ALERT LAYERS
       // This triggers ALL redundancy layers for maximum reliability
       newPendingIds.forEach(id => {
-        console.log('🔔 Activating all alert systems for booking:', id);
-        
+        console.log('🔔 Activating all 5 alert layers for booking:', id);
+
         // Find the booking details
         const booking = bookings.find(b => b.id === id);
         if (booking) {
           const guestName = booking.guest_name || booking.profiles?.full_name || 'Guest';
           const partySize = booking.party_size;
-          
+
           // LAYER 1: Redundant sound system (3 fallback methods)
           redundantSound.playSound(id);
-          
+
           // LAYER 2: Visual alerts (flashing screen + vibration)
           visualAlert.startAlert({
             bookingId: id,
             guestName,
             partySize
           });
-          
+
           // LAYER 3: Persistent notification system (20 repeating alerts)
           addPendingBooking(id, guestName, partySize);
-          
+
           // LAYER 4: Local push notification (works when app is closed)
           sendLocalNotification(
             '🎉 New Booking Request!',
             `${guestName} wants to book for ${partySize} ${partySize === 1 ? 'guest' : 'guests'}`,
             { bookingId: id, type: 'new_booking' }
           );
-          
-          console.log('✅ All alert systems activated for booking:', id);
+
+          // LAYER 5: Native Android Foreground Service (BULLETPROOF!)
+          // This is the most reliable method - survives force close and locked screen
+          nativeForegroundService.start({
+            bookingId: id,
+            guestName,
+            partySize
+          });
+
+          console.log('✅ All 5 alert layers activated for booking:', id);
         }
       });
       
@@ -449,58 +466,64 @@ export default function BookingsScreen() {
 
   const handleAccept = (bookingId: string) => {
     console.log('🛑 STOPPING ALL ALERT SYSTEMS for booking:', bookingId);
-    
-    // 🛑 STOP ALL ALERT SYSTEMS (Multiple layers for redundancy)
-    
+
+    // 🛑 STOP ALL 5 ALERT LAYERS (Maximum redundancy)
+
     // Layer 1: Original booking notification sound
     markBookingHandled(bookingId);
     stopSound(); // Force stop original sound system
-    
+
     // Layer 2: Persistent notifications (20 scheduled alerts)
     removePendingBooking(bookingId);
-    
+
     // Layer 3: Redundant sound system (3 fallback methods)
     redundantSound.stopSound();
-    
+
     // Layer 4: Visual alerts (flashing screen + vibration)
     visualAlert.stopAlert(bookingId);
-    
+
+    // Layer 5: Native Android Foreground Service
+    nativeForegroundService.stop(bookingId);
+
     // Update booking status
     updateBooking({ bookingId, status: 'confirmed' });
-    
+
     // Update badge count
     const pendingCount = bookings.filter(b => b.status === 'pending' && b.id !== bookingId).length;
     setBadgeCount(pendingCount);
-    
-    console.log('✅ Booking accepted - All 4 alert systems stopped for:', bookingId);
+
+    console.log('✅ Booking accepted - All 5 alert layers stopped for:', bookingId);
   };
 
   const handleDecline = (bookingId: string, note?: string) => {
     console.log('🛑 STOPPING ALL ALERT SYSTEMS for booking:', bookingId);
-    
-    // 🛑 STOP ALL ALERT SYSTEMS (Multiple layers for redundancy)
-    
+
+    // 🛑 STOP ALL 5 ALERT LAYERS (Maximum redundancy)
+
     // Layer 1: Original booking notification sound
     markBookingHandled(bookingId);
     stopSound(); // Force stop original sound system
-    
+
     // Layer 2: Persistent notifications (20 scheduled alerts)
     removePendingBooking(bookingId);
-    
+
     // Layer 3: Redundant sound system (3 fallback methods)
     redundantSound.stopSound();
-    
+
     // Layer 4: Visual alerts (flashing screen + vibration)
     visualAlert.stopAlert(bookingId);
-    
+
+    // Layer 5: Native Android Foreground Service
+    nativeForegroundService.stop(bookingId);
+
     // Update booking status
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
-    
+
     // Update badge count
     const pendingCount = bookings.filter(b => b.status === 'pending' && b.id !== bookingId).length;
     setBadgeCount(pendingCount);
-    
-    console.log('✅ Booking declined - All 4 alert systems stopped for:', bookingId);
+
+    console.log('✅ Booking declined - All 5 alert layers stopped for:', bookingId);
   };
 
   const handleComplete = (bookingId: string) => {
@@ -555,8 +578,8 @@ export default function BookingsScreen() {
             </Text>
           </View>
           <View className="flex-row gap-2 items-center">
-            {/* Background Service Indicator */}
-            {isServiceRunning && (
+            {/* Native Foreground Service Indicator */}
+            {nativeForegroundService.isServiceRunning && (
               <View className="bg-green-500/30 rounded-full px-2 py-1 flex-row items-center gap-1">
                 <View className="w-2 h-2 rounded-full bg-green-400" />
                 <Text className="text-background text-xs">Service Active</Text>
@@ -642,7 +665,31 @@ export default function BookingsScreen() {
               <MaterialIcons name="settings" size={20} color="#ffece2" />
             </TouchableOpacity>
 
-            {/* Test Sound Buttons - Remove after testing */}
+            {/* Test FCM Button */}
+            {fcmNotifications.isRegistered && (
+              <TouchableOpacity
+                className="bg-blue-500 rounded-full p-2"
+                onPress={() => {
+                  console.log('🧪 FCM test triggered');
+                  fcmNotifications.test();
+                }}
+              >
+                <MaterialIcons name="cloud" size={20} color="#ffece2" />
+              </TouchableOpacity>
+            )}
+
+            {/* Test Native Service Button */}
+            <TouchableOpacity
+              className="bg-orange-500 rounded-full p-2"
+              onPress={() => {
+                console.log('🧪 Native service test triggered');
+                nativeForegroundService.test();
+              }}
+            >
+              <MaterialIcons name="android" size={20} color="#ffece2" />
+            </TouchableOpacity>
+
+            {/* Test Sound Buttons */}
             <TouchableOpacity
               className="bg-green-500 rounded-full p-2"
               onPress={() => {
@@ -662,6 +709,7 @@ export default function BookingsScreen() {
                 stopSound(); // Original system
                 redundantSound.stopSound(); // Redundant system
                 visualAlert.stopAllAlerts(); // Visual alerts
+                nativeForegroundService.stop(); // Layer 5: Native foreground service
                 // Clear all pending bookings to stop scheduled notifications
                 const allPendingIds = bookings.filter(b => b.status === 'pending').map(b => b.id);
                 allPendingIds.forEach(id => {
@@ -669,7 +717,7 @@ export default function BookingsScreen() {
                   removePendingBooking(id);
                   visualAlert.stopAlert(id);
                 });
-                console.log('✅ ALL SYSTEMS STOPPED');
+                console.log('✅ ALL 5 LAYERS STOPPED');
               }}
             >
               <MaterialIcons name="volume-off" size={20} color="#ffece2" />

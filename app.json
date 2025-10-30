@@ -20,6 +20,7 @@
     "android": {
       "package": "com.qwertyapps.platemerchant",
       "versionCode": 1,
+      "googleServicesFile": "./constants/google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#792339",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -75,7 +76,15 @@
       ],
       [
         "expo-background-fetch"
-      ]
+      ],
+      "@react-native-firebase/app",
+      [
+        "@react-native-firebase/messaging",
+        {
+          "enableBackgroundNotifications": true
+        }
+      ],
+      "@notifee/react-native"
     ],
     "experiments": {
       "typedRoutes": true,
