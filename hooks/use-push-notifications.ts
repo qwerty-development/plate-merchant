@@ -148,20 +148,27 @@ export async function sendLocalNotification(
   sound: boolean = true
 ) {
   try {
+    const notificationContent: any = {
+      title,
+      body,
+      data,
+      sound: sound ? 'new_booking.wav' : undefined,
+      priority: Notifications.AndroidNotificationPriority.MAX,
+      vibrate: [0, 250, 250, 250],
+      categoryIdentifier: 'BOOKING_ACTION',
+      badge: 1,
+    };
+
+    // On Android, explicitly set the channel
+    if (Platform.OS === 'android') {
+      notificationContent.channelId = 'booking-alerts';
+    }
+
     await Notifications.scheduleNotificationAsync({
-      content: {
-        title,
-        body,
-        data,
-        sound: sound ? 'new_booking.wav' : undefined,
-        priority: Notifications.AndroidNotificationPriority.MAX,
-        vibrate: [0, 250, 250, 250],
-        categoryIdentifier: 'booking',
-        badge: 1,
-      },
+      content: notificationContent,
       trigger: null, // null = show immediately
     });
-    console.log('✅ Local notification sent');
+    console.log('✅ Local notification sent with sound:', sound);
   } catch (error) {
     console.error('❌ Error sending local notification:', error);
   }

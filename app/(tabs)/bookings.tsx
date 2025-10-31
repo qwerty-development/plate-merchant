@@ -215,21 +215,19 @@ export default function BookingsScreen() {
       id => !previousPendingIdsRef.current.has(id)
     );
 
-    // Find bookings that were pending but are no longer (cancelled by user)
+    // Find bookings that were pending but are no longer
     const noPendingIds = Array.from(previousPendingIdsRef.current).filter(
       id => !currentPendingIds.has(id)
     );
 
     if (noPendingIds.length > 0) {
       console.log('⚠️ Bookings no longer pending:', noPendingIds.length);
-      
-      // Stop sound for bookings that were cancelled by user
+
+      // Stop sound for ALL bookings that are no longer pending
       noPendingIds.forEach(id => {
-        const booking = bookings.find(b => b.id === id);
-        if (booking?.status === 'cancelled_by_user') {
-          console.log('🛑 Booking cancelled by user, stopping sound:', id);
-          markBookingHandled(id);
-        }
+        console.log('🛑 Booking no longer pending, stopping sound:', id);
+        markBookingHandled(id);
+        removePendingBooking(id); // Also remove from persistent notifications
       });
     }
 

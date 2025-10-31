@@ -19,12 +19,19 @@ export function useBatteryOptimization() {
   const checkBatteryOptimization = async () => {
     try {
       console.log('🔋 Checking battery optimization status...');
-      // Note: Expo doesn't have a direct way to check this
-      // We'll assume it's enabled and prompt the user
+      // Note: Expo doesn't have a direct way to check this programmatically
+      // We'll use AsyncStorage to track if user has dismissed the prompt
+      const AsyncStorage = await import('@react-native-async-storage/async-storage').then(m => m.default);
+      const dismissed = await AsyncStorage.getItem('battery_optimization_dismissed');
+
       setHasChecked(true);
-      setIsOptimized(true); // Assume optimized until proven otherwise
+      setIsOptimized(dismissed !== 'true'); // Show prompt only if not dismissed
+
+      console.log('🔋 Battery optimization check:', dismissed === 'true' ? 'Dismissed' : 'Will prompt');
     } catch (error) {
       console.error('❌ Error checking battery optimization:', error);
+      setHasChecked(true);
+      setIsOptimized(false); // Don't prompt on error
     }
   };
 
@@ -74,6 +81,9 @@ export function useBatteryOptimization() {
           console.log('✅ Opened battery optimization settings page');
         }
 
+        // Mark as dismissed so we don't keep prompting
+        const AsyncStorage = await import('@react-native-async-storage/async-storage').then(m => m.default);
+        await AsyncStorage.setItem('battery_optimization_dismissed', 'true');
         setIsOptimized(false);
       }
     } catch (error) {
@@ -90,7 +100,13 @@ export function useBatteryOptimization() {
         [
           {
             text: 'Open App Settings',
-            onPress: () => Linking.openSettings(),
+            onPress: async () => {
+              Linking.openSettings();
+              // Mark as dismissed
+              const AsyncStorage = await import('@react-native-async-storage/async-storage').then(m => m.default);
+              await AsyncStorage.setItem('battery_optimization_dismissed', 'true');
+              setIsOptimized(false);
+            },
           },
           {
             text: 'Cancel',
