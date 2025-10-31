@@ -3,13 +3,21 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { Platform } from 'react-native';
 import 'react-native-reanimated';
 import '../global.css';
 
 import { AuthProvider, useAuth } from '@/contexts/auth-context';
 import { RestaurantProvider } from '@/contexts/restaurant-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { registerForegroundServiceTask } from '@/services/foreground-service-task';
 import { ActivityIndicator, View } from 'react-native';
+
+// Register foreground service task ONCE at module load (before any React components render)
+// This is CRITICAL for Notifee foreground service to work
+if (Platform.OS === 'android') {
+  registerForegroundServiceTask();
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {

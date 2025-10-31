@@ -2,8 +2,9 @@ import AnalyticsCards from '@/components/bookings/analytics-cards';
 import BookingCard from '@/components/bookings/booking-card';
 import FilterControls from '@/components/bookings/filter-controls';
 import { useRestaurant } from '@/contexts/restaurant-context';
+import { useBatteryOptimization } from '@/hooks/use-battery-optimization';
 import { useBookingNotification } from '@/hooks/use-booking-notification';
-import { useForegroundService } from '@/hooks/use-foreground-service';
+import { useNotifeeForegroundService } from '@/hooks/use-notifee-foreground-service';
 import { usePersistentNotification } from '@/hooks/use-persistent-notification';
 import { sendLocalNotification, setBadgeCount, usePushNotifications } from '@/hooks/use-push-notifications';
 import { useRealtimeConnection } from '@/hooks/use-realtime-connection';
@@ -34,13 +35,22 @@ export default function BookingsScreen() {
   const queryClient = useQueryClient();
   const { playSound, markBookingHandled, stopSound } = useBookingNotification();
   const { expoPushToken } = usePushNotifications();
-  const { 
-    addPendingBooking, 
-    removePendingBooking, 
+  const {
+    addPendingBooking,
+    removePendingBooking,
     getPendingCount,
-    isBackgroundTaskRegistered 
+    isBackgroundTaskRegistered
   } = usePersistentNotification();
-  const { isServiceRunning } = useForegroundService(true);
+  const {
+    isServiceRunning,
+    isInitialized,
+    updateServiceNotification
+  } = useNotifeeForegroundService(true);
+  const {
+    isOptimized,
+    requestBatteryOptimizationExemption,
+    showBatteryOptimizationGuide
+  } = useBatteryOptimization();
   
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -52,14 +62,26 @@ export default function BookingsScreen() {
   const previousPendingIdsRef = useRef<Set<string>>(new Set());
   const isInitialLoadRef = useRef(true);
 
+  // Prompt for battery optimization on first load
+  useEffect(() => {
+    if (Platform.OS === 'android' && isOptimized && restaurant?.id) {
+      // Show battery optimization request after a short delay
+      const timer = setTimeout(() => {
+        requestBatteryOptimizationExemption();
+      }, 3000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [isOptimized, restaurant?.id]);
+
   // Handle notification action responses (Accept/Decline from notification)
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
       const action = response.actionIdentifier;
       const bookingId = response.notification.request.content.data?.bookingId as string;
-      
+
       console.log('📱 Notification action:', action, 'for booking:', bookingId);
-      
+
       if (!bookingId) return;
 
       if (action === 'ACCEPT') {
@@ -147,6 +169,26 @@ export default function BookingsScreen() {
     },
     enabled: !!restaurant?.id,
   });
+
+  // Update foreground service notification with pending count
+  useEffect(() => {
+    if (!isServiceRunning || !bookings) return;
+
+    const pendingCount = bookings.filter(b => b.status === 'pending').length;
+
+    if (pendingCount > 0) {
+      updateServiceNotification(
+        `🔔 ${pendingCount} Pending ${pendingCount === 1 ? 'Booking' : 'Bookings'}`,
+        'Tap to view and respond',
+        pendingCount
+      );
+    } else {
+      updateServiceNotification(
+        '✅ All Caught Up!',
+        'No pending bookings - listening for new requests'
+      );
+    }
+  }, [bookings, isServiceRunning, updateServiceNotification]);
 
   // Monitor pending bookings and play sound for new ones
   useEffect(() => {
@@ -422,6 +464,17 @@ export default function BookingsScreen() {
             </Text>
           </View>
           <View className="flex-row gap-2 items-center">
+            {/* Battery Optimization Indicator */}
+            {isOptimized && Platform.OS === 'android' && (
+              <TouchableOpacity
+                className="bg-orange-500/30 rounded-full px-2 py-1 flex-row items-center gap-1"
+                onPress={showBatteryOptimizationGuide}
+              >
+                <MaterialIcons name="battery-alert" size={12} color="#ffece2" />
+                <Text className="text-background text-xs">Battery</Text>
+              </TouchableOpacity>
+            )}
+
             {/* Background Service Indicator */}
             {isServiceRunning && (
               <View className="bg-green-500/30 rounded-full px-2 py-1 flex-row items-center gap-1">
