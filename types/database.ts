@@ -115,21 +115,6 @@ export interface BookingUpdatePayload {
   note?: string;
 }
 
-export interface RestaurantDevice {
-  id: string;
-  user_id: string;
-  restaurant_id: string | null;
-  device_id: string;
-  fcm_token: string;
-  platform: 'android' | 'ios';
-  app_version: string | null;
-  device_name: string | null;
-  enabled: boolean;
-  last_seen: string;
-  created_at: string;
-  updated_at: string;
-}
-
 
 
 
