@@ -9,6 +9,7 @@ import { usePersistentNotification } from '@/hooks/use-persistent-notification';
 import { setBadgeCount, usePushNotifications } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
 import { triggerBookingAlert, stopBookingAlert } from '@/services/booking-alert-manager';
+import { initializeRestaurantPushNotifications } from '@/services/restaurant-push-notifications';
 import { BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -92,6 +93,25 @@ export default function BookingsScreen() {
     stopBookingAlert(bookingId);
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
   }, [markBookingHandled, removePendingBooking, updateBooking]);
+
+  // Initialize server-side push notifications (100% reliable)
+  useEffect(() => {
+    if (Platform.OS === 'android' && restaurant?.id) {
+      console.log('🚀 Initializing server-side push notifications...');
+
+      initializeRestaurantPushNotifications(restaurant.id)
+        .then((success) => {
+          if (success) {
+            console.log('✅ Server-side push notifications initialized');
+          } else {
+            console.error('❌ Failed to initialize push notifications');
+          }
+        })
+        .catch((error) => {
+          console.error('❌ Push notification initialization error:', error);
+        });
+    }
+  }, [restaurant?.id]);
 
   // Prompt for battery optimization on first load
   useEffect(() => {
