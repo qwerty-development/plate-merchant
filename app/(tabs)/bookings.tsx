@@ -3,25 +3,29 @@ import BookingCard from '@/components/bookings/booking-card';
 import FilterControls from '@/components/bookings/filter-controls';
 import { useRestaurant } from '@/contexts/restaurant-context';
 import { useBatteryOptimization } from '@/hooks/use-battery-optimization';
-import { useNativeBookingService } from '@/hooks/use-native-booking-service';
-import { setBadgeCount } from '@/hooks/use-push-notifications';
+import { useBookingNotification } from '@/hooks/use-booking-notification';
+import { useNotifeeForegroundService } from '@/hooks/use-notifee-foreground-service';
+import { usePersistentNotification } from '@/hooks/use-persistent-notification';
+import { setBadgeCount, usePushNotifications } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
+import { triggerBookingAlert, stopBookingAlert } from '@/services/booking-alert-manager';
 import { BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { endOfDay } from 'date-fns/endOfDay';
 import { startOfDay } from 'date-fns/startOfDay';
+import * as Notifications from 'expo-notifications';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Platform,
-    RefreshControl,
-    ScrollView,
-    Text,
-    ToastAndroid,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  Text,
+  ToastAndroid,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 type DateFilter = 'today' | 'week' | 'month' | 'all' | 'custom';
@@ -29,15 +33,10 @@ type DateFilter = 'today' | 'week' | 'month' | 'all' | 'custom';
 export default function BookingsScreen() {
   const { restaurant } = useRestaurant();
   const queryClient = useQueryClient();
-  
-  // Native booking service - replaces old notification system
-  const {
-    isServiceRunning: isNativeServiceRunning,
-    lastBookingEvent,
-    startService: startNativeService,
-    stopAlarm,
-  } = useNativeBookingService();
-  
+  const { playSound, markBookingHandled } = useBookingNotification();
+  const { expoPushToken } = usePushNotifications();
+  const { removePendingBooking } = usePersistentNotification();
+  const { isServiceRunning, updateServiceNotification } = useNotifeeForegroundService(true);
   const {
     isOptimized,
     requestBatteryOptimizationExemption,
@@ -80,43 +79,19 @@ export default function BookingsScreen() {
 
   const handleAccept = useCallback((bookingId: string) => {
     console.log('✅ Accepting booking:', bookingId);
-    // Stop the native alarm
-    stopAlarm(bookingId);
-    // Update booking status in Supabase
+    markBookingHandled(bookingId);
+    removePendingBooking(bookingId);
+    stopBookingAlert(bookingId);
     updateBooking({ bookingId, status: 'confirmed' });
-  }, [stopAlarm, updateBooking]);
+  }, [markBookingHandled, removePendingBooking, updateBooking]);
 
   const handleDecline = useCallback((bookingId: string, note?: string) => {
     console.log('❌ Declining booking:', bookingId);
-    // Stop the native alarm
-    stopAlarm(bookingId);
-    // Update booking status in Supabase
+    markBookingHandled(bookingId);
+    removePendingBooking(bookingId);
+    stopBookingAlert(bookingId);
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
-  }, [stopAlarm, updateBooking]);
-
-  // Start native booking service when restaurant loads
-  useEffect(() => {
-    if (restaurant?.id && !isNativeServiceRunning) {
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      
-      if (supabaseUrl && supabaseKey) {
-        console.log('🚀 Starting native booking service for restaurant:', restaurant.id);
-        startNativeService(restaurant.id, supabaseUrl, supabaseKey);
-      } else {
-        console.error('❌ Missing Supabase configuration in environment variables');
-      }
-    }
-  }, [restaurant?.id, isNativeServiceRunning, startNativeService]);
-
-  // Listen for booking events from native service
-  useEffect(() => {
-    if (lastBookingEvent) {
-      console.log('📨 Booking event from native service:', lastBookingEvent);
-      // Refresh bookings list
-      queryClient.invalidateQueries({ queryKey: ['bookings'] });
-    }
-  }, [lastBookingEvent, queryClient]);
+  }, [markBookingHandled, removePendingBooking, updateBooking]);
 
   // Prompt for battery optimization on first load
   useEffect(() => {
@@ -127,6 +102,18 @@ export default function BookingsScreen() {
       return () => clearTimeout(timer);
     }
   }, [isOptimized, restaurant?.id, requestBatteryOptimizationExemption]);
+
+  // Handle notification action responses (Accept/Decline from notification)
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
+      const action = response.actionIdentifier;
+      const bookingId = response.notification.request.content.data?.bookingId as string;
+      if (!bookingId) return;
+      if (action === 'ACCEPT') handleAccept(bookingId);
+      else if (action === 'DECLINE') handleDecline(bookingId);
+    });
+    return () => subscription.remove();
+  }, [handleAccept, handleDecline]);
 
   // Fetch bookings
   const { data: bookings = [], isLoading } = useQuery({
@@ -168,12 +155,70 @@ export default function BookingsScreen() {
     enabled: !!restaurant?.id,
   });
 
-  // Update badge count based on pending bookings
+  // Update foreground service notification and badge count
   useEffect(() => {
-    if (!bookings) return;
+    if (!isServiceRunning || !bookings) return;
     const pendingCount = bookings.filter(b => b.status === 'pending').length;
     setBadgeCount(pendingCount);
-  }, [bookings]);
+    if (pendingCount > 0) {
+      updateServiceNotification(
+        `🔔 ${pendingCount} Pending ${pendingCount === 1 ? 'Booking' : 'Bookings'}`,
+        'Tap to view and respond',
+        pendingCount
+      );
+    } else {
+      updateServiceNotification('✅ All Caught Up!', 'Listening for new requests');
+    }
+  }, [bookings, isServiceRunning, updateServiceNotification]);
+
+  // Play IN-APP sound for new bookings & stop sound for handled ones
+  useEffect(() => {
+    if (!bookings) return;
+    const currentPendingIds = new Set(bookings.filter(b => b.status === 'pending').map(b => b.id));
+
+    if (isInitialLoadRef.current) {
+      previousPendingIdsRef.current = currentPendingIds;
+      isInitialLoadRef.current = false;
+      return;
+    }
+
+    const newPendingIds = Array.from(currentPendingIds).filter(id => !previousPendingIdsRef.current.has(id));
+    if (newPendingIds.length > 0) {
+      newPendingIds.forEach(id => {
+        console.log('🔔 New pending booking detected:', id);
+
+        // Play in-app sound (works when app is in foreground)
+        playSound(id);
+
+        // Trigger native notification alert (works even when backgrounded)
+        const booking = bookings.find(b => b.id === id);
+        if (booking) {
+          const guestName = booking.guest_name || booking.profiles?.full_name || 'Guest';
+          const partySize = booking.party_size;
+          const bookingTime = booking.booking_time ? new Date(booking.booking_time).toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+          }) : undefined;
+
+          console.log('🚨 Triggering native booking alert...');
+          triggerBookingAlert(id, guestName, partySize, bookingTime);
+        }
+      });
+    }
+
+    const handledPendingIds = Array.from(previousPendingIdsRef.current).filter(id => !currentPendingIds.has(id));
+    if (handledPendingIds.length > 0) {
+      handledPendingIds.forEach(id => {
+        console.log('✅ Booking handled:', id);
+        markBookingHandled(id);
+        stopBookingAlert(id); // Stop native alert
+        removePendingBooking(id); // Stop persistent notification
+      });
+    }
+
+    previousPendingIdsRef.current = currentPendingIds;
+  }, [bookings, playSound, markBookingHandled]);
 
   // Listen for ANY booking changes to refresh the UI
   useEffect(() => {
@@ -249,10 +294,10 @@ export default function BookingsScreen() {
                 <Text className="text-background text-xs">Battery</Text>
               </TouchableOpacity>
             )}
-            {isNativeServiceRunning && (
+            {isServiceRunning && (
               <View className="bg-green-500/30 rounded-full px-2 py-1 flex-row items-center gap-1">
                 <View className="w-2 h-2 rounded-full bg-green-400" />
-                <Text className="text-background text-xs">Native Service Active</Text>
+                <Text className="text-background text-xs">Service Active</Text>
               </View>
             )}
             <TouchableOpacity className="bg-background/20 rounded-full p-2" onPress={() => setShowAnalytics(!showAnalytics)}>

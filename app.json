@@ -97,9 +97,7 @@
       "router": {},
       "eas": {
         "projectId": "5ccab33a-c59d-4b80-b15c-c4d78568ef35"
-      },
-      "supabaseUrl": "https://xsovqvbigdettnpeisjs.supabase.co",
-      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhzb3ZxdmJpZ2RldHRucGVpc2pzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTAwNzUzODIsImV4cCI6MjA2NTY1MTM4Mn0.QY4L0oKNEjJE5dv7dok2zz4TouiehxqibbfBGnmjLO8"
+      }
     },
     "owner": "qwerty-app",
     "runtimeVersion": {
