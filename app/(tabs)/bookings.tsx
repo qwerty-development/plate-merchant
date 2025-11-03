@@ -8,6 +8,7 @@ import { useNotifeeForegroundService } from '@/hooks/use-notifee-foreground-serv
 import { usePersistentNotification } from '@/hooks/use-persistent-notification';
 import { setBadgeCount, usePushNotifications } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
+import { triggerBookingAlert, stopBookingAlert } from '@/services/booking-alert-manager';
 import { BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -77,14 +78,18 @@ export default function BookingsScreen() {
   }, [queryClient]);
 
   const handleAccept = useCallback((bookingId: string) => {
+    console.log('✅ Accepting booking:', bookingId);
     markBookingHandled(bookingId);
     removePendingBooking(bookingId);
+    stopBookingAlert(bookingId);
     updateBooking({ bookingId, status: 'confirmed' });
   }, [markBookingHandled, removePendingBooking, updateBooking]);
 
   const handleDecline = useCallback((bookingId: string, note?: string) => {
+    console.log('❌ Declining booking:', bookingId);
     markBookingHandled(bookingId);
     removePendingBooking(bookingId);
+    stopBookingAlert(bookingId);
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
   }, [markBookingHandled, removePendingBooking, updateBooking]);
 
@@ -180,15 +185,35 @@ export default function BookingsScreen() {
     const newPendingIds = Array.from(currentPendingIds).filter(id => !previousPendingIdsRef.current.has(id));
     if (newPendingIds.length > 0) {
       newPendingIds.forEach(id => {
-        console.log('🔔 Playing IN-APP sound for new booking:', id);
+        console.log('🔔 New pending booking detected:', id);
+
+        // Play in-app sound (works when app is in foreground)
         playSound(id);
+
+        // Trigger native notification alert (works even when backgrounded)
+        const booking = bookings.find(b => b.id === id);
+        if (booking) {
+          const guestName = booking.guest_name || booking.profiles?.full_name || 'Guest';
+          const partySize = booking.party_size;
+          const bookingTime = booking.booking_time ? new Date(booking.booking_time).toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+          }) : undefined;
+
+          console.log('🚨 Triggering native booking alert...');
+          triggerBookingAlert(id, guestName, partySize, bookingTime);
+        }
       });
     }
 
     const handledPendingIds = Array.from(previousPendingIdsRef.current).filter(id => !currentPendingIds.has(id));
     if (handledPendingIds.length > 0) {
       handledPendingIds.forEach(id => {
+        console.log('✅ Booking handled:', id);
         markBookingHandled(id);
+        stopBookingAlert(id); // Stop native alert
+        removePendingBooking(id); // Stop persistent notification
       });
     }
 
