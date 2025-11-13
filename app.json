@@ -20,6 +20,7 @@
     "android": {
       "package": "com.qwertyapps.platemerchant",
       "versionCode": 1,
+      "googleServicesFile": "./config/firebase/google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#792339",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
