@@ -1,19 +1,108 @@
 /**
- * Persistent Audio Manager using react-native-sound
+ * Persistent Audio Manager with Android Foreground Service
  * This provides TRUE background audio that works even when:
  * - App is closed
  * - Screen is off
  * - Device is locked
  *
- * Uses native Android MediaPlayer instead of JavaScript-based audio
+ * Architecture:
+ * 1. Notifee Foreground Service - Keeps app alive and shows notification
+ * 2. react-native-sound - Plays audio continuously (protected by the service)
+ * 3. Wake lock via foreground service - Prevents CPU sleep during audio playback
  */
 
 import Sound from 'react-native-sound';
 import { Platform } from 'react-native';
+import notifee, { AndroidImportance, AndroidCategory } from '@notifee/react-native';
 
 const activeBookingSounds = new Set<string>();
 let alertSound: Sound | null = null;
 let isPlaying = false;
+let foregroundServiceStarted = false;
+
+const CHANNEL_ID = 'booking-alert-channel';
+const NOTIFICATION_ID = 'booking-alert-notification';
+
+/**
+ * Create notification channel for foreground service
+ * Required for Android 8+
+ */
+async function createNotificationChannel() {
+  if (Platform.OS !== 'android') return;
+
+  try {
+    await notifee.createChannel({
+      id: CHANNEL_ID,
+      name: 'Booking Alerts',
+      description: 'Continuous alerts for new restaurant bookings',
+      importance: AndroidImportance.HIGH,
+      sound: 'default', // This is for the notification sound, not our custom alert
+      vibration: false, // Disable vibration for the notification itself
+    });
+    console.log('✅ [PersistentAudio] Notification channel created');
+  } catch (error) {
+    console.error('❌ [PersistentAudio] Failed to create channel:', error);
+  }
+}
+
+/**
+ * Start Android Foreground Service with persistent notification
+ * This keeps the app alive in background and allows audio to continue
+ */
+async function startForegroundService() {
+  if (Platform.OS !== 'android' || foregroundServiceStarted) return;
+
+  try {
+    console.log('🚀 [PersistentAudio] Starting foreground service...');
+
+    await createNotificationChannel();
+
+    // Display foreground notification
+    await notifee.displayNotification({
+      id: NOTIFICATION_ID,
+      title: '🔔 New Booking Alert',
+      body: 'Alert sound is playing. Accept or decline the booking to stop.',
+      android: {
+        channelId: CHANNEL_ID,
+        importance: AndroidImportance.HIGH,
+        category: AndroidCategory.ALARM,
+        ongoing: true, // Cannot be dismissed by user
+        autoCancel: false,
+        asForegroundService: true, // THIS IS THE KEY - makes it a foreground service!
+        colorized: true,
+        color: '#FF6B6B',
+        smallIcon: 'ic_launcher', // Default Android icon
+        pressAction: {
+          id: 'default',
+          launchActivity: 'default',
+        },
+      },
+    });
+
+    foregroundServiceStarted = true;
+    console.log('✅ [PersistentAudio] Foreground service started');
+  } catch (error) {
+    console.error('❌ [PersistentAudio] Failed to start foreground service:', error);
+  }
+}
+
+/**
+ * Stop Android Foreground Service and remove notification
+ */
+async function stopForegroundService() {
+  if (Platform.OS !== 'android' || !foregroundServiceStarted) return;
+
+  try {
+    console.log('🛑 [PersistentAudio] Stopping foreground service...');
+
+    await notifee.cancelNotification(NOTIFICATION_ID);
+    foregroundServiceStarted = false;
+
+    console.log('✅ [PersistentAudio] Foreground service stopped');
+  } catch (error) {
+    console.error('❌ [PersistentAudio] Failed to stop foreground service:', error);
+  }
+}
 
 /**
  * Initialize the sound system for background audio
@@ -58,6 +147,8 @@ export async function setupPersistentAudio() {
 /**
  * Start playing the persistent alert sound for a booking
  * Sound will loop continuously until explicitly stopped
+ *
+ * KEY: Starts foreground service FIRST to protect the audio playback
  */
 export async function startPersistentAlert(bookingId: string): Promise<void> {
   if (Platform.OS !== 'android') return;
@@ -73,7 +164,11 @@ export async function startPersistentAlert(bookingId: string): Promise<void> {
       console.log(`[PersistentAudio] Booking ${bookingId} already in active sounds.`);
     }
 
-    // If already playing, no need to restart
+    // CRITICAL: Start foreground service BEFORE audio playback
+    // This prevents Android from killing the process
+    await startForegroundService();
+
+    // If already playing, no need to restart audio
     if (isPlaying && alertSound) {
       alertSound.getCurrentTime((seconds) => {
         console.log('[PersistentAudio] ✅ Audio already playing continuously at', seconds, 'seconds');
@@ -93,7 +188,7 @@ export async function startPersistentAlert(bookingId: string): Promise<void> {
 
     console.log('[PersistentAudio] 🎵 Starting continuous looping audio...');
 
-    // Start playback
+    // Start playback (now protected by foreground service!)
     alertSound.play((success) => {
       if (success) {
         console.log('[PersistentAudio] ✅ Audio playback completed successfully (will loop)');
@@ -110,7 +205,7 @@ export async function startPersistentAlert(bookingId: string): Promise<void> {
     });
 
     isPlaying = true;
-    console.log('[PersistentAudio] ✅ Started continuous looping audio!');
+    console.log('[PersistentAudio] ✅ Started continuous looping audio with foreground service!');
   } catch (error) {
     console.error('[PersistentAudio] ❌ Error starting alert:', error);
     console.error('[PersistentAudio] Error details:', {
@@ -123,6 +218,8 @@ export async function startPersistentAlert(bookingId: string): Promise<void> {
 /**
  * Stop the persistent alert for a specific booking
  * Only stops playback if no other bookings are pending
+ *
+ * KEY: Stops foreground service when no more bookings to free resources
  */
 export async function stopPersistentAlert(bookingId: string): Promise<void> {
   if (Platform.OS !== 'android') return;
@@ -138,13 +235,17 @@ export async function stopPersistentAlert(bookingId: string): Promise<void> {
 
     // Only stop if no more active bookings
     if (activeBookingSounds.size === 0 && alertSound) {
-      console.log('[PersistentAudio] No more active bookings, stopping audio');
+      console.log('[PersistentAudio] No more active bookings, stopping audio and service');
 
+      // Stop audio
       alertSound.pause();
       alertSound.setCurrentTime(0); // Reset to beginning
       isPlaying = false;
 
-      console.log('✅ [PersistentAudio] Audio stopped');
+      // CRITICAL: Stop foreground service to free resources
+      await stopForegroundService();
+
+      console.log('✅ [PersistentAudio] Audio and foreground service stopped');
     } else {
       console.log(`[PersistentAudio] Audio continues playing (${activeBookingSounds.size} bookings still active)`);
     }
@@ -179,7 +280,8 @@ export async function getAudioStatus(): Promise<{
 }
 
 /**
- * Clean up sound resources (call on app exit if needed)
+ * Clean up sound resources and stop foreground service
+ * Call on app exit if needed
  */
 export async function cleanupPersistentAudio(): Promise<void> {
   if (Platform.OS !== 'android') return;
@@ -195,6 +297,9 @@ export async function cleanupPersistentAudio(): Promise<void> {
 
     activeBookingSounds.clear();
     isPlaying = false;
+
+    // Stop foreground service
+    await stopForegroundService();
 
     console.log('✅ [PersistentAudio] Cleanup complete');
   } catch (error) {
