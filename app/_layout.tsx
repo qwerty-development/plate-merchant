@@ -13,16 +13,11 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { initializeBookingAlerts } from '@/services/booking-alert-manager';
 import { setupBackgroundMessageHandler } from '@/services/fcm-service';
 import { setupPersistentAudio } from '@/services/persistent-audio-manager';
-import { PlaybackService } from '@/services/track-player-service';
-import TrackPlayer from 'react-native-track-player';
 import { ActivityIndicator, View } from 'react-native';
-
-// Register track player service for background playback
-TrackPlayer.registerPlaybackService(() => PlaybackService);
 
 // Initialize notification systems at module load (before any React components render)
 if (Platform.OS === 'android') {
-  // Initialize persistent audio with native track player
+  // Initialize persistent audio with native Sound library
   setupPersistentAudio().catch(error => {
     console.error('❌ Failed to setup persistent audio:', error);
   });

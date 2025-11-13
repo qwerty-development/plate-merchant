@@ -1,5 +1,5 @@
 /**
- * Persistent Audio Manager using react-native-track-player
+ * Persistent Audio Manager using react-native-sound
  * This provides TRUE background audio that works even when:
  * - App is closed
  * - Screen is off
@@ -8,94 +8,58 @@
  * Uses native Android MediaPlayer instead of JavaScript-based audio
  */
 
-import TrackPlayer, {
-  Capability,
-  RepeatMode,
-  State,
-  AppKilledPlaybackBehavior
-} from 'react-native-track-player';
+import Sound from 'react-native-sound';
 import { Platform } from 'react-native';
 
 const activeBookingSounds = new Set<string>();
-let isPlayerSetup = false;
+let alertSound: Sound | null = null;
 let isPlaying = false;
 
-const BOOKING_ALERT_TRACK = {
-  id: 'booking-alert-sound',
-  url: require('@/assets/notification/new_booking.wav'),
-  title: 'New Booking Alert',
-  artist: 'Plate Merchant',
-  duration: 5, // Approximate duration in seconds
-};
-
 /**
- * Initialize the track player for background audio
+ * Initialize the sound system for background audio
  * MUST be called at app startup
  */
 export async function setupPersistentAudio() {
   if (Platform.OS !== 'android') return;
 
-  try {
-    console.log('🎵 [PersistentAudio] Setting up track player...');
+  return new Promise<void>((resolve, reject) => {
+    try {
+      console.log('🎵 [PersistentAudio] Setting up native sound...');
 
-    // Check if already setup
-    const currentTrack = await TrackPlayer.getActiveTrack();
-    if (currentTrack) {
-      console.log('✅ [PersistentAudio] Track player already initialized');
-      isPlayerSetup = true;
-      return;
+      // Enable playback in silence mode (iOS) and background (Android)
+      Sound.setCategory('Playback', true);
+
+      // Load the alert sound
+      alertSound = new Sound('new_booking.wav', Sound.MAIN_BUNDLE, (error) => {
+        if (error) {
+          console.error('❌ [PersistentAudio] Failed to load sound:', error);
+          reject(error);
+          return;
+        }
+
+        console.log('✅ [PersistentAudio] Sound loaded successfully');
+        console.log('[PersistentAudio] Duration:', alertSound?.getDuration(), 'seconds');
+
+        // Set to loop infinitely
+        alertSound?.setNumberOfLoops(-1); // -1 = infinite loop
+
+        // Set volume to maximum
+        alertSound?.setVolume(1.0);
+
+        resolve();
+      });
+    } catch (error) {
+      console.error('❌ [PersistentAudio] Setup error:', error);
+      reject(error);
     }
-
-    // Setup track player
-    await TrackPlayer.setupPlayer({
-      waitForBuffer: false, // Start immediately
-      autoHandleInterruptions: false, // Don't pause for phone calls - critical alert
-    });
-
-    // Configure capabilities for foreground service
-    await TrackPlayer.updateOptions({
-      android: {
-        appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback,
-        alwaysPauseOnInterruption: false,
-      },
-      capabilities: [
-        Capability.Play,
-        Capability.Pause,
-        Capability.Stop,
-      ],
-      compactCapabilities: [
-        Capability.Play,
-        Capability.Pause,
-      ],
-      notificationCapabilities: [
-        Capability.Play,
-        Capability.Pause,
-      ],
-      progressUpdateEventInterval: 2,
-    });
-
-    // Add the alert sound track
-    await TrackPlayer.add(BOOKING_ALERT_TRACK);
-
-    // Set repeat mode to loop indefinitely
-    await TrackPlayer.setRepeatMode(RepeatMode.Track);
-
-    // Set volume to maximum
-    await TrackPlayer.setVolume(1.0);
-
-    isPlayerSetup = true;
-    console.log('✅ [PersistentAudio] Track player initialized and ready');
-  } catch (error) {
-    console.error('❌ [PersistentAudio] Failed to setup:', error);
-    throw error;
-  }
+  });
 }
 
 /**
  * Start playing the persistent alert sound for a booking
  * Sound will loop continuously until explicitly stopped
  */
-export async function startPersistentAlert(bookingId: string) {
+export async function startPersistentAlert(bookingId: string): Promise<void> {
   if (Platform.OS !== 'android') return;
 
   try {
@@ -105,37 +69,48 @@ export async function startPersistentAlert(bookingId: string) {
     if (!activeBookingSounds.has(bookingId)) {
       console.log(`[PersistentAudio] Adding booking ${bookingId} to active sounds. Total: ${activeBookingSounds.size + 1}`);
       activeBookingSounds.add(bookingId);
+    } else {
+      console.log(`[PersistentAudio] Booking ${bookingId} already in active sounds.`);
     }
 
     // If already playing, no need to restart
-    if (isPlaying) {
-      const state = await TrackPlayer.getPlaybackState();
-      if (state.state === State.Playing) {
-        console.log('[PersistentAudio] ✅ Audio already playing continuously');
-        return;
-      }
+    if (isPlaying && alertSound) {
+      alertSound.getCurrentTime((seconds) => {
+        console.log('[PersistentAudio] ✅ Audio already playing continuously at', seconds, 'seconds');
+      });
+      return;
     }
 
-    // Ensure player is setup
-    if (!isPlayerSetup) {
-      console.log('[PersistentAudio] Player not setup, initializing...');
+    // Ensure sound is loaded
+    if (!alertSound) {
+      console.log('[PersistentAudio] Sound not loaded, initializing...');
       await setupPersistentAudio();
     }
 
+    if (!alertSound) {
+      throw new Error('Sound failed to initialize');
+    }
+
+    console.log('[PersistentAudio] 🎵 Starting continuous looping audio...');
+
     // Start playback
-    await TrackPlayer.play();
-    isPlaying = true;
+    alertSound.play((success) => {
+      if (success) {
+        console.log('[PersistentAudio] ✅ Audio playback completed successfully (will loop)');
+      } else {
+        console.error('[PersistentAudio] ❌ Audio playback failed');
+        isPlaying = false;
 
-    console.log('[PersistentAudio] ✅ Started continuous looping audio!');
-
-    // Log playback state for debugging
-    const state = await TrackPlayer.getPlaybackState();
-    const queue = await TrackPlayer.getQueue();
-    console.log('[PersistentAudio] Playback state:', {
-      state: state.state,
-      queueLength: queue.length,
-      repeatMode: await TrackPlayer.getRepeatMode()
+        // Try to restart
+        alertSound?.reset();
+        alertSound?.play(() => {
+          console.log('[PersistentAudio] 🔄 Audio restarted after failure');
+        });
+      }
     });
+
+    isPlaying = true;
+    console.log('[PersistentAudio] ✅ Started continuous looping audio!');
   } catch (error) {
     console.error('[PersistentAudio] ❌ Error starting alert:', error);
     console.error('[PersistentAudio] Error details:', {
@@ -149,7 +124,7 @@ export async function startPersistentAlert(bookingId: string) {
  * Stop the persistent alert for a specific booking
  * Only stops playback if no other bookings are pending
  */
-export async function stopPersistentAlert(bookingId: string) {
+export async function stopPersistentAlert(bookingId: string): Promise<void> {
   if (Platform.OS !== 'android') return;
 
   try {
@@ -162,11 +137,11 @@ export async function stopPersistentAlert(bookingId: string) {
     }
 
     // Only stop if no more active bookings
-    if (activeBookingSounds.size === 0) {
+    if (activeBookingSounds.size === 0 && alertSound) {
       console.log('[PersistentAudio] No more active bookings, stopping audio');
 
-      await TrackPlayer.pause();
-      await TrackPlayer.seekTo(0); // Reset to beginning for next time
+      alertSound.pause();
+      alertSound.setCurrentTime(0); // Reset to beginning
       isPlaying = false;
 
       console.log('✅ [PersistentAudio] Audio stopped');
@@ -181,40 +156,46 @@ export async function stopPersistentAlert(bookingId: string) {
 /**
  * Get current playback status (for debugging)
  */
-export async function getAudioStatus() {
-  if (Platform.OS !== 'android') return null;
+export async function getAudioStatus(): Promise<{
+  isPlaying: boolean;
+  activeBookings: number;
+  bookingIds: string[];
+  currentTime?: number;
+  duration?: number;
+} | null> {
+  if (Platform.OS !== 'android' || !alertSound) return null;
 
-  try {
-    const state = await TrackPlayer.getPlaybackState();
-    const position = await TrackPlayer.getPosition();
-    const duration = await TrackPlayer.getDuration();
-
-    return {
-      isPlaying: state.state === State.Playing,
-      state: state.state,
-      position,
-      duration,
-      activeBookings: activeBookingSounds.size,
-      bookingIds: Array.from(activeBookingSounds)
-    };
-  } catch (error) {
-    console.error('[PersistentAudio] Error getting status:', error);
-    return null;
-  }
+  return new Promise((resolve) => {
+    alertSound?.getCurrentTime((seconds) => {
+      resolve({
+        isPlaying,
+        activeBookings: activeBookingSounds.size,
+        bookingIds: Array.from(activeBookingSounds),
+        currentTime: seconds,
+        duration: alertSound?.getDuration()
+      });
+    });
+  });
 }
 
 /**
- * Clean up track player (call on app exit if needed)
+ * Clean up sound resources (call on app exit if needed)
  */
-export async function cleanupPersistentAudio() {
+export async function cleanupPersistentAudio(): Promise<void> {
   if (Platform.OS !== 'android') return;
 
   try {
     console.log('[PersistentAudio] Cleaning up...');
-    await TrackPlayer.reset();
+
+    if (alertSound) {
+      alertSound.stop();
+      alertSound.release();
+      alertSound = null;
+    }
+
     activeBookingSounds.clear();
-    isPlayerSetup = false;
     isPlaying = false;
+
     console.log('✅ [PersistentAudio] Cleanup complete');
   } catch (error) {
     console.error('[PersistentAudio] Error during cleanup:', error);
