@@ -10,19 +10,22 @@ import '../global.css';
 import { AuthProvider, useAuth } from '@/contexts/auth-context';
 import { RestaurantProvider } from '@/contexts/restaurant-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { registerForegroundServiceTask } from '@/services/foreground-service-task';
 import { initializeBookingAlerts } from '@/services/booking-alert-manager';
+import { setupBackgroundMessageHandler } from '@/services/fcm-service';
 import { ActivityIndicator, View } from 'react-native';
 
-// Register foreground service task ONCE at module load (before any React components render)
-// This is CRITICAL for Notifee foreground service to work
+// Initialize notification systems at module load (before any React components render)
 if (Platform.OS === 'android') {
-  registerForegroundServiceTask();
-
-  // Initialize booking alert system
+  // Initialize Notifee booking alert channels
   initializeBookingAlerts().catch(error => {
     console.error('❌ Failed to initialize booking alerts:', error);
   });
+
+  // Setup FCM background message handler
+  // This MUST be called outside of React components
+  setupBackgroundMessageHandler();
+
+  console.log('✅ Notification systems initialized');
 }
 
 const queryClient = new QueryClient({

@@ -5,10 +5,10 @@ import { useRestaurant } from '@/contexts/restaurant-context';
 import { useBatteryOptimization } from '@/hooks/use-battery-optimization';
 import { useBookingNotification } from '@/hooks/use-booking-notification';
 import { useNotifeeForegroundService } from '@/hooks/use-notifee-foreground-service';
-import { usePersistentNotification } from '@/hooks/use-persistent-notification';
-import { setBadgeCount, usePushNotifications } from '@/hooks/use-push-notifications';
+import { setBadgeCount } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
 import { triggerBookingAlert, stopBookingAlert } from '@/services/booking-alert-manager';
+import { initializeFCM } from '@/services/fcm-service';
 import { BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -34,8 +34,6 @@ export default function BookingsScreen() {
   const { restaurant } = useRestaurant();
   const queryClient = useQueryClient();
   const { playSound, markBookingHandled } = useBookingNotification();
-  const { expoPushToken } = usePushNotifications();
-  const { removePendingBooking } = usePersistentNotification();
   const { isServiceRunning, updateServiceNotification } = useNotifeeForegroundService(true);
   const {
     isOptimized,
@@ -80,18 +78,25 @@ export default function BookingsScreen() {
   const handleAccept = useCallback((bookingId: string) => {
     console.log('✅ Accepting booking:', bookingId);
     markBookingHandled(bookingId);
-    removePendingBooking(bookingId);
     stopBookingAlert(bookingId);
     updateBooking({ bookingId, status: 'confirmed' });
-  }, [markBookingHandled, removePendingBooking, updateBooking]);
+  }, [markBookingHandled, updateBooking]);
 
   const handleDecline = useCallback((bookingId: string, note?: string) => {
     console.log('❌ Declining booking:', bookingId);
     markBookingHandled(bookingId);
-    removePendingBooking(bookingId);
     stopBookingAlert(bookingId);
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
-  }, [markBookingHandled, removePendingBooking, updateBooking]);
+  }, [markBookingHandled, updateBooking]);
+
+  // Initialize FCM when restaurant is loaded
+  useEffect(() => {
+    if (restaurant?.id && Platform.OS === 'android') {
+      console.log('🚀 [Bookings] Initializing FCM for restaurant:', restaurant.id);
+      const cleanup = initializeFCM(restaurant.id);
+      return cleanup;
+    }
+  }, [restaurant?.id]);
 
   // Prompt for battery optimization on first load
   useEffect(() => {
@@ -171,7 +176,8 @@ export default function BookingsScreen() {
     }
   }, [bookings, isServiceRunning, updateServiceNotification]);
 
-  // Play IN-APP sound for new bookings & stop sound for handled ones
+  // Stop sounds and alerts when bookings are handled
+  // Note: FCM handles triggering notifications for NEW bookings
   useEffect(() => {
     if (!bookings) return;
     const currentPendingIds = new Set(bookings.filter(b => b.status === 'pending').map(b => b.id));
@@ -182,43 +188,18 @@ export default function BookingsScreen() {
       return;
     }
 
-    const newPendingIds = Array.from(currentPendingIds).filter(id => !previousPendingIdsRef.current.has(id));
-    if (newPendingIds.length > 0) {
-      newPendingIds.forEach(id => {
-        console.log('🔔 New pending booking detected:', id);
-
-        // Play in-app sound (works when app is in foreground)
-        playSound(id);
-
-        // Trigger native notification alert (works even when backgrounded)
-        const booking = bookings.find(b => b.id === id);
-        if (booking) {
-          const guestName = booking.guest_name || booking.profiles?.full_name || 'Guest';
-          const partySize = booking.party_size;
-          const bookingTime = booking.booking_time ? new Date(booking.booking_time).toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
-          }) : undefined;
-
-          console.log('🚨 Triggering native booking alert...');
-          triggerBookingAlert(id, guestName, partySize, bookingTime);
-        }
-      });
-    }
-
+    // Detect bookings that were pending but are now handled
     const handledPendingIds = Array.from(previousPendingIdsRef.current).filter(id => !currentPendingIds.has(id));
     if (handledPendingIds.length > 0) {
       handledPendingIds.forEach(id => {
         console.log('✅ Booking handled:', id);
         markBookingHandled(id);
-        stopBookingAlert(id); // Stop native alert
-        removePendingBooking(id); // Stop persistent notification
+        stopBookingAlert(id);
       });
     }
 
     previousPendingIdsRef.current = currentPendingIds;
-  }, [bookings, playSound, markBookingHandled]);
+  }, [bookings, markBookingHandled]);
 
   // Listen for ANY booking changes to refresh the UI
   useEffect(() => {
