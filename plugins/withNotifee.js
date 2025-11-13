@@ -45,6 +45,38 @@ const withNotifee = (config) => {
 
       const application = manifest.application[0];
 
+      // Add xmlns:tools for manifest merging
+      if (!manifest.$) {
+        manifest.$ = {};
+      }
+      if (!manifest.$['xmlns:tools']) {
+        manifest.$['xmlns:tools'] = 'http://schemas.android.com/tools';
+      }
+
+      // Ensure meta-data array exists
+      if (!application['meta-data']) {
+        application['meta-data'] = [];
+      }
+
+      // Fix manifest merger conflict: notification_icon_color
+      // Both expo-notifications and react-native-firebase-messaging declare this
+      // We need to explicitly set it with tools:replace to resolve the conflict
+      const notificationColorMetadata = {
+        $: {
+          'android:name': 'com.google.firebase.messaging.default_notification_color',
+          'android:resource': '@color/notification_icon_color',
+          'tools:replace': 'android:resource',
+        },
+      };
+
+      // Remove existing notification color metadata if present
+      application['meta-data'] = application['meta-data'].filter(
+        (meta) => meta.$['android:name'] !== 'com.google.firebase.messaging.default_notification_color'
+      );
+
+      // Add our version with tools:replace
+      application['meta-data'].push(notificationColorMetadata);
+
       // Ensure service array exists
       if (!application.service) {
         application.service = [];
