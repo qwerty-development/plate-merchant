@@ -11,7 +11,7 @@
 import messaging from '@react-native-firebase/messaging';
 import { Platform } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { playNotificationSound } from './notification-sound-manager';
+import { startPersistentAlert } from './persistent-audio-manager';
 import { triggerBookingAlert } from './booking-alert-manager';
 import notifee from '@notifee/react-native';
 
@@ -134,9 +134,9 @@ export function setupBackgroundMessageHandler() {
 
       console.log('🎉 [FCM Background] New booking:', { bookingId, guestName, partySize });
 
-      // Play notification sound (don't let it block alert)
-      playNotificationSound(bookingId).catch(err => {
-        console.error('❌ [FCM Background] Sound error:', err);
+      // Start persistent audio alert (native audio, works in background)
+      startPersistentAlert(bookingId).catch(err => {
+        console.error('❌ [FCM Background] Audio error:', err);
       });
 
       // Trigger Notifee booking alert with actions (don't let it block sound)
@@ -176,9 +176,9 @@ export function setupForegroundMessageHandler() {
 
       console.log('🎉 [FCM Foreground] New booking:', { bookingId, guestName, partySize });
 
-      // Play notification sound (don't let it block alert)
-      playNotificationSound(bookingId).catch(err => {
-        console.error('❌ [FCM Foreground] Sound error:', err);
+      // Start persistent audio alert (native audio, works in background)
+      startPersistentAlert(bookingId).catch(err => {
+        console.error('❌ [FCM Foreground] Audio error:', err);
       });
 
       // Trigger Notifee booking alert (this already displays the notification, no need for duplicate)

@@ -9,7 +9,7 @@ import { setBadgeCount } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
 import { triggerBookingAlert, stopBookingAlert } from '@/services/booking-alert-manager';
 import { initializeFCM } from '@/services/fcm-service';
-import { playNotificationSound, stopNotificationSound } from '@/services/notification-sound-manager';
+import { startPersistentAlert, stopPersistentAlert } from '@/services/persistent-audio-manager';
 import { BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -80,7 +80,7 @@ export default function BookingsScreen() {
     console.log('✅ Accepting booking:', bookingId);
     markBookingHandled(bookingId);
     stopBookingAlert(bookingId);
-    stopNotificationSound(bookingId);
+    stopPersistentAlert(bookingId);
     updateBooking({ bookingId, status: 'confirmed' });
   }, [markBookingHandled, updateBooking]);
 
@@ -88,7 +88,7 @@ export default function BookingsScreen() {
     console.log('❌ Declining booking:', bookingId);
     markBookingHandled(bookingId);
     stopBookingAlert(bookingId);
-    stopNotificationSound(bookingId);
+    stopPersistentAlert(bookingId);
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
   }, [markBookingHandled, updateBooking]);
 
@@ -191,9 +191,9 @@ export default function BookingsScreen() {
       pendingBookings.forEach(booking => {
         console.log(`🎉 [Bookings] Triggering alert for existing booking: ${booking.id}`);
 
-        // Play sound (non-blocking)
-        playNotificationSound(booking.id).catch(err => {
-          console.error(`❌ [Bookings] Error playing sound for ${booking.id}:`, err);
+        // Start persistent audio alert (non-blocking)
+        startPersistentAlert(booking.id).catch(err => {
+          console.error(`❌ [Bookings] Error starting audio for ${booking.id}:`, err);
         });
 
         // Trigger alert (non-blocking)
@@ -232,7 +232,7 @@ export default function BookingsScreen() {
         console.log('✅ Booking handled:', id);
         markBookingHandled(id);
         stopBookingAlert(id);
-        stopNotificationSound(id);
+        stopPersistentAlert(id);
       });
     }
 
