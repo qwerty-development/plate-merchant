@@ -15,7 +15,8 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.qwertyapps.platemerchant"
+      "bundleIdentifier": "com.qwertyapps.platemerchant",
+      "googleServicesFile": "./config/firebase/GoogleService-Info.plist"
     },
     "android": {
       "package": "com.qwertyapps.platemerchant",

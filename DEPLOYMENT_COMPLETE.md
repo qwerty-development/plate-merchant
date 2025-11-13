@@ -28,7 +28,8 @@ All infrastructure, code, and configuration is now deployed and ready for testin
   - Batch FCM sending to all restaurant devices
 
 ### 3. ✅ Firebase Configuration
-- **google-services.json**: Placed in `android/app/`
+- **google-services.json**: Located in `config/firebase/` (tracked in git)
+- **app.json**: `googleServicesFile` path configured for Expo builds
 - **Project ID**: plate-merchant-f9684
 - **Package Name**: com.qwertyapps.platemerchant ✅ (verified match)
 - **Service Account**: Set as Supabase secret ✅

@@ -74,8 +74,8 @@ npx supabase secrets list | grep FIREBASE
 
 ## Files Modified
 
-- ✅ `android/app/google-services.json` - Firebase config
-- ✅ `app.json` - Added Firebase plugin
+- ✅ `config/firebase/google-services.json` - Firebase config
+- ✅ `app.json` - Added Firebase plugin + googleServicesFile path
 - ✅ `services/fcm-service.ts` - FCM implementation
 - ✅ Supabase secrets - FIREBASE_SERVICE_ACCOUNT set
 - ✅ Database - device_tokens table + trigger created
