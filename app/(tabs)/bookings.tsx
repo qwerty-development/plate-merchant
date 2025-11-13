@@ -9,6 +9,7 @@ import { setBadgeCount } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
 import { triggerBookingAlert, stopBookingAlert } from '@/services/booking-alert-manager';
 import { initializeFCM } from '@/services/fcm-service';
+import { playNotificationSound, stopNotificationSound } from '@/services/notification-sound-manager';
 import { BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -79,6 +80,7 @@ export default function BookingsScreen() {
     console.log('✅ Accepting booking:', bookingId);
     markBookingHandled(bookingId);
     stopBookingAlert(bookingId);
+    stopNotificationSound(bookingId);
     updateBooking({ bookingId, status: 'confirmed' });
   }, [markBookingHandled, updateBooking]);
 
@@ -86,6 +88,7 @@ export default function BookingsScreen() {
     console.log('❌ Declining booking:', bookingId);
     markBookingHandled(bookingId);
     stopBookingAlert(bookingId);
+    stopNotificationSound(bookingId);
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
   }, [markBookingHandled, updateBooking]);
 
@@ -176,6 +179,40 @@ export default function BookingsScreen() {
     }
   }, [bookings, isServiceRunning, updateServiceNotification]);
 
+  // Trigger sound/alerts for existing pending bookings on initial load
+  useEffect(() => {
+    if (!bookings || !isInitialLoadRef.current) return;
+
+    const pendingBookings = bookings.filter(b => b.status === 'pending');
+    if (pendingBookings.length > 0) {
+      console.log(`🔊 [Bookings] Found ${pendingBookings.length} existing pending bookings, triggering alerts`);
+
+      // Trigger sound and alerts for each pending booking
+      pendingBookings.forEach(booking => {
+        console.log(`🎉 [Bookings] Triggering alert for existing booking: ${booking.id}`);
+
+        // Play sound (non-blocking)
+        playNotificationSound(booking.id).catch(err => {
+          console.error(`❌ [Bookings] Error playing sound for ${booking.id}:`, err);
+        });
+
+        // Trigger alert (non-blocking)
+        const guestName = booking.profiles?.name || 'Guest';
+        const partySize = booking.party_size || 1;
+        const bookingTime = booking.booking_time ?
+          new Date(booking.booking_time).toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+          }) : '';
+
+        triggerBookingAlert(booking.id, guestName, partySize, bookingTime).catch(err => {
+          console.error(`❌ [Bookings] Error triggering alert for ${booking.id}:`, err);
+        });
+      });
+    }
+  }, [bookings]);
+
   // Stop sounds and alerts when bookings are handled
   // Note: FCM handles triggering notifications for NEW bookings
   useEffect(() => {
@@ -195,6 +232,7 @@ export default function BookingsScreen() {
         console.log('✅ Booking handled:', id);
         markBookingHandled(id);
         stopBookingAlert(id);
+        stopNotificationSound(id);
       });
     }
 

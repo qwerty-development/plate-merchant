@@ -8,13 +8,32 @@ const activeBookingSounds = new Set<string>();
 
 /**
  * Initializes the audio system for background and silent playback.
+ * This ensures audio continues playing even when:
+ * - App is in background
+ * - Screen is off
+ * - Device is locked
  */
 export async function setupAudio() {
-  await Audio.setAudioModeAsync({
-    playsInSilentModeIOS: true,
-    staysActiveInBackground: true,
-    shouldDuckAndroid: false,
-  });
+  try {
+    console.log('[SoundManager] Setting up audio mode for background playback');
+    await Audio.setAudioModeAsync({
+      // iOS settings
+      playsInSilentModeIOS: true,
+
+      // Android settings - Critical for background playback
+      staysActiveInBackground: true, // Keep audio alive in background
+      shouldDuckAndroid: false, // Don't lower volume for other apps
+      interruptionModeAndroid: 2, // INTERRUPTION_MODE_ANDROID_DUCK_OTHERS
+      allowsRecordingIOS: false,
+
+      // Additional settings for reliability
+      playThroughEarpieceAndroid: false, // Use speaker, not earpiece
+    });
+    console.log('[SoundManager] Audio mode configured successfully');
+  } catch (error) {
+    console.error('[SoundManager] Failed to setup audio mode:', error);
+    throw error;
+  }
 }
 
 /**
@@ -23,28 +42,64 @@ export async function setupAudio() {
  */
 export async function playNotificationSound(bookingId: string) {
   try {
+    console.log(`🔊 [SoundManager] Request to play sound for booking: ${bookingId}`);
+
     if (!activeBookingSounds.has(bookingId)) {
-        console.log(`[SoundManager] Adding booking ${bookingId} to active sounds.`);
+        console.log(`[SoundManager] Adding booking ${bookingId} to active sounds. Total active: ${activeBookingSounds.size + 1}`);
         activeBookingSounds.add(bookingId);
+    } else {
+        console.log(`[SoundManager] Booking ${bookingId} already in active sounds.`);
     }
 
+    // Check if sound is already playing
     if (sound) {
       const status = await sound.getStatusAsync();
       if (status.isLoaded && status.isPlaying) {
-        console.log('[SoundManager] Sound is already playing.');
+        console.log('[SoundManager] ✅ Sound is already playing continuously. No action needed.');
         return;
+      } else {
+        console.log('[SoundManager] Sound exists but not playing. Status:', {
+          isLoaded: status.isLoaded,
+          isPlaying: (status as any).isPlaying
+        });
       }
     }
 
-    console.log('[SoundManager] Loading and playing sound...');
-    await setupAudio(); // Ensure audio mode is set
-    const { sound: newSound } = await Audio.Sound.createAsync(SOUND_FILE, {
-      shouldPlay: true,
-      isLooping: true,
-    });
+    console.log('[SoundManager] 🎵 Loading and playing notification sound...');
+
+    // Re-ensure audio mode (in case it was reset)
+    await setupAudio();
+
+    const { sound: newSound } = await Audio.Sound.createAsync(
+      SOUND_FILE,
+      {
+        shouldPlay: true,
+        isLooping: true, // Loop continuously until explicitly stopped
+        volume: 1.0, // Maximum volume
+      },
+      (status) => {
+        // Status callback for debugging
+        if (!status.isLoaded) {
+          console.error('[SoundManager] Sound failed to load:', status);
+        } else {
+          console.log('[SoundManager] Sound status update:', {
+            isPlaying: (status as any).isPlaying,
+            isLooping: (status as any).isLooping,
+            positionMillis: (status as any).positionMillis,
+            durationMillis: (status as any).durationMillis
+          });
+        }
+      }
+    );
+
     sound = newSound;
+    console.log('[SoundManager] ✅ Sound started playing in continuous loop!');
   } catch (error) {
-    console.error('[SoundManager] Error playing sound:', error);
+    console.error('[SoundManager] ❌ CRITICAL ERROR playing sound:', error);
+    console.error('[SoundManager] Error details:', {
+      message: (error as Error).message,
+      stack: (error as Error).stack
+    });
   }
 }
 
