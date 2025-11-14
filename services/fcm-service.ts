@@ -8,10 +8,12 @@
  * 4. Triggering notifications and sounds when FCM messages arrive
  */
 
-import { supabase } from '@/lib/supabase';
 import messaging from '@react-native-firebase/messaging';
 import { Platform } from 'react-native';
-import { restaurantAlertService } from './restaurant-alert-service';
+import { supabase } from '@/lib/supabase';
+import { startPersistentAlert } from './persistent-audio-manager';
+import { triggerBookingAlert } from './booking-alert-manager';
+import notifee from '@notifee/react-native';
 
 /**
  * Request notification permissions and get FCM token
@@ -132,10 +134,17 @@ export function setupBackgroundMessageHandler() {
 
       console.log('🎉 [FCM Background] New booking:', { bookingId, guestName, partySize });
 
-      // Start restaurant alert (sound + notification + screen wake)
-      await restaurantAlertService.startBookingAlert(bookingId, guestName, partySize, bookingTime);
+      // Start persistent audio alert (native audio, works in background)
+      startPersistentAlert(bookingId).catch(err => {
+        console.error('❌ [FCM Background] Audio error:', err);
+      });
 
-      console.log('✅ [FCM Background] Alert triggered successfully');
+      // Trigger Notifee booking alert with actions (don't let it block sound)
+      triggerBookingAlert(bookingId, guestName, partySize, bookingTime).catch(err => {
+        console.error('❌ [FCM Background] Alert error:', err);
+      });
+
+      console.log('✅ [FCM Background] Notification and sound triggered');
     } catch (error) {
       console.error('❌ [FCM Background] Error handling message:', error);
     }
@@ -167,10 +176,17 @@ export function setupForegroundMessageHandler() {
 
       console.log('🎉 [FCM Foreground] New booking:', { bookingId, guestName, partySize });
 
-      // Start restaurant alert (sound + notification + screen wake)
-      await restaurantAlertService.startBookingAlert(bookingId, guestName, partySize, bookingTime);
+      // Start persistent audio alert (native audio, works in background)
+      startPersistentAlert(bookingId).catch(err => {
+        console.error('❌ [FCM Foreground] Audio error:', err);
+      });
 
-      console.log('✅ [FCM Foreground] Alert triggered successfully');
+      // Trigger Notifee booking alert (this already displays the notification, no need for duplicate)
+      triggerBookingAlert(bookingId, guestName, partySize, bookingTime).catch(err => {
+        console.error('❌ [FCM Foreground] Alert error:', err);
+      });
+
+      console.log('✅ [FCM Foreground] Notification and sound triggered');
     } catch (error) {
       console.error('❌ [FCM Foreground] Error handling message:', error);
     }
