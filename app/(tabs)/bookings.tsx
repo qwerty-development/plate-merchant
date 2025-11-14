@@ -4,12 +4,10 @@ import FilterControls from '@/components/bookings/filter-controls';
 import { useRestaurant } from '@/contexts/restaurant-context';
 import { useBatteryOptimization } from '@/hooks/use-battery-optimization';
 import { useBookingNotification } from '@/hooks/use-booking-notification';
-import { useNotifeeForegroundService } from '@/hooks/use-notifee-foreground-service';
 import { setBadgeCount } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
-import { triggerBookingAlert, stopBookingAlert } from '@/services/booking-alert-manager';
 import { initializeFCM } from '@/services/fcm-service';
-import { startPersistentAlert, stopPersistentAlert } from '@/services/persistent-audio-manager';
+import { restaurantAlertService } from '@/services/restaurant-alert-service';
 import { BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -35,7 +33,6 @@ export default function BookingsScreen() {
   const { restaurant } = useRestaurant();
   const queryClient = useQueryClient();
   const { playSound, markBookingHandled } = useBookingNotification();
-  const { isServiceRunning, updateServiceNotification } = useNotifeeForegroundService(true);
   const {
     isOptimized,
     requestBatteryOptimizationExemption,
@@ -49,6 +46,7 @@ export default function BookingsScreen() {
   const [endDate, setEndDate] = useState<Date>(endOfDay(new Date()));
   const [refreshing, setRefreshing] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [serviceStatus, setServiceStatus] = useState(restaurantAlertService.getStatus());
   const previousPendingIdsRef = useRef<Set<string>>(new Set());
   const isInitialLoadRef = useRef(true);
 
@@ -76,19 +74,17 @@ export default function BookingsScreen() {
     }
   }, [queryClient]);
 
-  const handleAccept = useCallback((bookingId: string) => {
+  const handleAccept = useCallback(async (bookingId: string) => {
     console.log('✅ Accepting booking:', bookingId);
     markBookingHandled(bookingId);
-    stopBookingAlert(bookingId);
-    stopPersistentAlert(bookingId);
+    await restaurantAlertService.stopBookingAlert(bookingId);
     updateBooking({ bookingId, status: 'confirmed' });
   }, [markBookingHandled, updateBooking]);
 
-  const handleDecline = useCallback((bookingId: string, note?: string) => {
+  const handleDecline = useCallback(async (bookingId: string, note?: string) => {
     console.log('❌ Declining booking:', bookingId);
     markBookingHandled(bookingId);
-    stopBookingAlert(bookingId);
-    stopPersistentAlert(bookingId);
+    await restaurantAlertService.stopBookingAlert(bookingId);
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
   }, [markBookingHandled, updateBooking]);
 
@@ -163,21 +159,18 @@ export default function BookingsScreen() {
     enabled: !!restaurant?.id,
   });
 
-  // Update foreground service notification and badge count
+  // Update service status and badge count
   useEffect(() => {
-    if (!isServiceRunning || !bookings) return;
+    if (!bookings) return;
     const pendingCount = bookings.filter(b => b.status === 'pending').length;
     setBadgeCount(pendingCount);
-    if (pendingCount > 0) {
-      updateServiceNotification(
-        `🔔 ${pendingCount} Pending ${pendingCount === 1 ? 'Booking' : 'Bookings'}`,
-        'Tap to view and respond',
-        pendingCount
-      );
-    } else {
-      updateServiceNotification('✅ All Caught Up!', 'Listening for new requests');
-    }
-  }, [bookings, isServiceRunning, updateServiceNotification]);
+    
+    // Update service notification
+    restaurantAlertService.updateServiceStatus(pendingCount);
+    
+    // Update local status
+    setServiceStatus(restaurantAlertService.getStatus());
+  }, [bookings]);
 
   // Trigger sound/alerts for existing pending bookings on initial load
   useEffect(() => {
@@ -187,17 +180,12 @@ export default function BookingsScreen() {
     if (pendingBookings.length > 0) {
       console.log(`🔊 [Bookings] Found ${pendingBookings.length} existing pending bookings, triggering alerts`);
 
-      // Trigger sound and alerts for each pending booking
+      // Trigger alert for each pending booking
       pendingBookings.forEach(booking => {
         console.log(`🎉 [Bookings] Triggering alert for existing booking: ${booking.id}`);
 
-        // Start persistent audio alert (non-blocking)
-        startPersistentAlert(booking.id).catch(err => {
-          console.error(`❌ [Bookings] Error starting audio for ${booking.id}:`, err);
-        });
-
-        // Trigger alert (non-blocking)
-        const guestName = booking.profiles?.name || 'Guest';
+        // Start restaurant alert
+        const guestName = booking.profiles?.full_name || booking.guest_name || 'Guest';
         const partySize = booking.party_size || 1;
         const bookingTime = booking.booking_time ?
           new Date(booking.booking_time).toLocaleTimeString('en-US', {
@@ -206,15 +194,14 @@ export default function BookingsScreen() {
             hour12: true
           }) : '';
 
-        triggerBookingAlert(booking.id, guestName, partySize, bookingTime).catch(err => {
-          console.error(`❌ [Bookings] Error triggering alert for ${booking.id}:`, err);
+        restaurantAlertService.startBookingAlert(booking.id, guestName, partySize, bookingTime).catch(err => {
+          console.error(`❌ [Bookings] Error starting alert for ${booking.id}:`, err);
         });
       });
     }
   }, [bookings]);
 
-  // Stop sounds and alerts when bookings are handled
-  // Note: FCM handles triggering notifications for NEW bookings
+  // Stop alerts when bookings are handled
   useEffect(() => {
     if (!bookings) return;
     const currentPendingIds = new Set(bookings.filter(b => b.status === 'pending').map(b => b.id));
@@ -231,8 +218,7 @@ export default function BookingsScreen() {
       handledPendingIds.forEach(id => {
         console.log('✅ Booking handled:', id);
         markBookingHandled(id);
-        stopBookingAlert(id);
-        stopPersistentAlert(id);
+        restaurantAlertService.stopBookingAlert(id);
       });
     }
 
@@ -313,10 +299,16 @@ export default function BookingsScreen() {
                 <Text className="text-background text-xs">Battery</Text>
               </TouchableOpacity>
             )}
-            {isServiceRunning && (
+            {serviceStatus.isServiceRunning && (
               <View className="bg-green-500/30 rounded-full px-2 py-1 flex-row items-center gap-1">
                 <View className="w-2 h-2 rounded-full bg-green-400" />
                 <Text className="text-background text-xs">Service Active</Text>
+              </View>
+            )}
+            {serviceStatus.activeBookings > 0 && (
+              <View className="bg-red-500/30 rounded-full px-2 py-1 flex-row items-center gap-1">
+                <View className="w-2 h-2 rounded-full bg-red-400" />
+                <Text className="text-background text-xs">{serviceStatus.activeBookings} Alert{serviceStatus.activeBookings > 1 ? 's' : ''}</Text>
               </View>
             )}
             <TouchableOpacity className="bg-background/20 rounded-full p-2" onPress={() => setShowAnalytics(!showAnalytics)}>
