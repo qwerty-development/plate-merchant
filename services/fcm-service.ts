@@ -11,7 +11,7 @@
 import messaging from '@react-native-firebase/messaging';
 import { Platform } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { startPersistentAlert } from './persistent-audio-manager';
+import { playNotificationSound } from './notification-sound-manager';
 import { triggerBookingAlert } from './booking-alert-manager';
 import notifee from '@notifee/react-native';
 
@@ -134,8 +134,8 @@ export function setupBackgroundMessageHandler() {
 
       console.log('🎉 [FCM Background] New booking:', { bookingId, guestName, partySize });
 
-      // Start persistent audio alert (native audio, works in background)
-      startPersistentAlert(bookingId).catch(err => {
+      // Start continuous alarm sound (expo-av with proper audio focus)
+      playNotificationSound(bookingId).catch(err => {
         console.error('❌ [FCM Background] Audio error:', err);
       });
 
@@ -176,8 +176,8 @@ export function setupForegroundMessageHandler() {
 
       console.log('🎉 [FCM Foreground] New booking:', { bookingId, guestName, partySize });
 
-      // Start persistent audio alert (native audio, works in background)
-      startPersistentAlert(bookingId).catch(err => {
+      // Start continuous alarm sound (expo-av with proper audio focus)
+      playNotificationSound(bookingId).catch(err => {
         console.error('❌ [FCM Foreground] Audio error:', err);
       });
 

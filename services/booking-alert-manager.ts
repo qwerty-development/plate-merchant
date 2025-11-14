@@ -18,6 +18,10 @@ const ACTIVE_BOOKINGS = new Set<string>();
 /**
  * Initialize the booking alert notification channel
  * MUST be called at app startup
+ *
+ * IMPORTANT: On Android 8.0+, notification sounds are set on the CHANNEL, not on individual notifications.
+ * We set a custom sound here that will play once when the notification is displayed.
+ * The continuous looping alarm is handled separately by notification-sound-manager.ts
  */
 export async function initializeBookingAlerts() {
   if (Platform.OS !== 'android') return;
@@ -25,28 +29,48 @@ export async function initializeBookingAlerts() {
   try {
     console.log('🔔 [BookingAlerts] Initializing booking alert channel...');
 
-    // Create HIGH PRIORITY channel for booking alerts
+    // CRITICAL: Create HIGH PRIORITY channel for booking alerts
+    // Note: For Android 8.0+, sound is configured on the CHANNEL, not per-notification
     await notifee.createChannel({
       id: BOOKING_CHANNEL_ID,
       name: 'Booking Alerts',
       description: 'Critical alerts for new booking requests',
-      importance: AndroidImportance.HIGH, // HIGH = shows as heads-up notification
-      sound: 'default', // Use default notification sound (custom sounds require native setup)
+
+      // HIGHEST priority - shows as heads-up notification
+      importance: AndroidImportance.HIGH,
+
+      // Custom notification sound (plays once when notification appears)
+      // The sound file should be in android/app/src/main/res/raw/new_booking.wav
+      // NOTE: Specify filename WITHOUT extension for Android
+      sound: 'new_booking', // This will play ONCE when notification is shown
+
+      // Vibration settings
       vibration: true,
-      vibrationPattern: [500, 500, 500, 500], // Strong vibration pattern
+      vibrationPattern: [0, 500, 250, 500], // Immediate, strong pattern
+
+      // Visual alerts
       lights: true,
-      lightColor: '#792339',
-      bypassDnd: true, // Bypass Do Not Disturb mode
+      lightColor: '#792339', // Brand color
+
+      // CRITICAL: Bypass Do Not Disturb mode (requires permission)
+      bypassDnd: true,
     });
 
-    console.log('✅ [BookingAlerts] Booking alert channel created');
+    console.log('✅ [BookingAlerts] Booking alert channel created with custom sound');
+    console.log('   Sound: new_booking.wav (plays once per notification)');
+    console.log('   Importance: HIGH (heads-up)');
+    console.log('   Bypass DND: YES');
 
     // Set up notification event handlers
     notifee.onForegroundEvent(handleNotificationEvent);
     notifee.onBackgroundEvent(handleNotificationEvent);
 
+    console.log('✅ [BookingAlerts] Event handlers registered');
+
   } catch (error) {
     console.error('❌ [BookingAlerts] Error initializing:', error);
+    console.error('   Channel ID:', BOOKING_CHANNEL_ID);
+    console.error('   Error message:', (error as Error).message);
   }
 }
 

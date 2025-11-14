@@ -12,26 +12,29 @@ import { RestaurantProvider } from '@/contexts/restaurant-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { initializeBookingAlerts } from '@/services/booking-alert-manager';
 import { setupBackgroundMessageHandler } from '@/services/fcm-service';
-import { setupPersistentAudio } from '@/services/persistent-audio-manager';
+import { setupAudio } from '@/services/notification-sound-manager';
 import { ActivityIndicator, View } from 'react-native';
 
 // Initialize notification systems at module load (before any React components render)
 if (Platform.OS === 'android') {
-  // Initialize persistent audio with native Sound library
-  setupPersistentAudio().catch(error => {
-    console.error('❌ Failed to setup persistent audio:', error);
+  console.log('🚀 [App] Initializing notification and audio systems...');
+
+  // Initialize audio system with expo-av (CRITICAL: Must be first)
+  setupAudio().catch(error => {
+    console.error('❌ [App] CRITICAL: Failed to setup audio system:', error);
+    console.error('    Bookings will NOT make sound!');
   });
 
   // Initialize Notifee booking alert channels
   initializeBookingAlerts().catch(error => {
-    console.error('❌ Failed to initialize booking alerts:', error);
+    console.error('❌ [App] Failed to initialize booking alerts:', error);
   });
 
   // Setup FCM background message handler
   // This MUST be called outside of React components
   setupBackgroundMessageHandler();
 
-  console.log('✅ Notification systems initialized');
+  console.log('✅ [App] Notification systems initialized');
 }
 
 const queryClient = new QueryClient({
