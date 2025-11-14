@@ -1,23 +1,79 @@
-const { withAndroidManifest, withPlugins } = require('@expo/config-plugins');
+const { withAndroidManifest, withPlugins, withDangerousMod } = require('@expo/config-plugins');
+const fs = require('fs');
+const path = require('path');
 
 /**
- * Notifee Config Plugin for Expo
- * Configures Android manifest for Notifee foreground service
+ * Combined plugin for Notifee and Notification Sound
+ * 1. Configures Android manifest for Notifee foreground service
+ * 2. Copies notification sound to Android resources for EAS Build
  */
+
+// Function to copy notification sound to Android resources
+function withNotificationSound(config) {
+  return withDangerousMod(config, [
+    'android',
+    async (config) => {
+      const projectRoot = config.modRequest.projectRoot;
+      const platformRoot = path.join(projectRoot, 'android');
+
+      // Source and destination paths
+      const soundSourcePath = path.join(projectRoot, 'assets', 'notification', 'new_booking.wav');
+      const soundDestDir = path.join(platformRoot, 'app', 'src', 'main', 'res', 'raw');
+      const soundDestPath = path.join(soundDestDir, 'new_booking.wav');
+
+      console.log('🔊 [NotificationSound] Copying sound file for Android...');
+      console.log('  Source:', soundSourcePath);
+      console.log('  Destination:', soundDestPath);
+
+      // Check if source file exists
+      if (!fs.existsSync(soundSourcePath)) {
+        console.warn('⚠️ [NotificationSound] Sound file not found, skipping copy');
+        return config;
+      }
+
+      // Create raw directory if it doesn't exist
+      if (!fs.existsSync(soundDestDir)) {
+        console.log('📁 Creating raw resources directory...');
+        fs.mkdirSync(soundDestDir, { recursive: true });
+      }
+
+      // Copy the sound file
+      try {
+        fs.copyFileSync(soundSourcePath, soundDestPath);
+        console.log('✅ [NotificationSound] Sound file copied successfully!');
+      } catch (error) {
+        console.error('❌ [NotificationSound] Failed to copy sound file:', error);
+        // Don't throw, just warn - build can continue
+        console.warn('Build will continue but sound may not work');
+      }
+
+      return config;
+    },
+  ]);
+}
+
+// Main Notifee configuration
 const withNotifee = (config) => {
   return withPlugins(config, [
-    // Configure Android Manifest
+    // First copy the sound file
+    withNotificationSound,
+
+    // Then configure Android Manifest
     (config) => withAndroidManifest(config, (config) => {
       const { manifest } = config.modResults;
 
-      // Required permissions for Notifee foreground service
+      // Required permissions for Notifee foreground service and sound
       const permissions = [
         'android.permission.FOREGROUND_SERVICE',
         'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
         'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+        'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
         'android.permission.POST_NOTIFICATIONS',
         'android.permission.WAKE_LOCK',
         'android.permission.USE_FULL_SCREEN_INTENT',
+        'android.permission.DISABLE_KEYGUARD',
+        'android.permission.TURN_SCREEN_ON',
+        'android.permission.VIBRATE',
       ];
 
       // Ensure uses-permission array exists
@@ -59,8 +115,6 @@ const withNotifee = (config) => {
       }
 
       // Fix manifest merger conflict: notification_icon_color
-      // Both expo-notifications and react-native-firebase-messaging declare this
-      // We need to explicitly set it with tools:replace to resolve the conflict
       const notificationColorMetadata = {
         $: {
           'android:name': 'com.google.firebase.messaging.default_notification_color',
@@ -88,7 +142,7 @@ const withNotifee = (config) => {
           'android:name': 'app.notifee.core.ForegroundService',
           'android:exported': 'false',
           'android:enabled': 'true',
-          'android:foregroundServiceType': 'dataSync|specialUse',
+          'android:foregroundServiceType': 'dataSync|specialUse|mediaPlayback',
           'android:stopWithTask': 'false',
         },
       };
@@ -121,6 +175,7 @@ const withNotifee = (config) => {
         application.property.push(specialUseProperty);
       }
 
+      console.log('✅ [Notifee Plugin] Android manifest configured');
       return config;
     }),
   ]);
