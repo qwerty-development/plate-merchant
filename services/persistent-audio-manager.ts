@@ -7,16 +7,21 @@
  *
  * Architecture:
  * 1. Notifee Foreground Service - Keeps app alive and shows notification
- * 2. react-native-sound - Plays audio continuously (protected by the service)
+ * 2. Expo AV - Plays audio continuously (protected by the service)
  * 3. Wake lock via foreground service - Prevents CPU sleep during audio playback
+ *
+ * IMPORTANT: We use expo-av instead of react-native-sound because:
+ * - expo-av properly handles Expo asset bundling with require()
+ * - react-native-sound expects native resources which don't work reliably with Expo managed workflow
+ * - The foreground service is what keeps audio alive, not the audio library choice
  */
 
-import Sound from 'react-native-sound';
+import { Audio } from 'expo-av';
 import { Platform } from 'react-native';
 import notifee, { AndroidImportance, AndroidCategory } from '@notifee/react-native';
 
 const activeBookingSounds = new Set<string>();
-let alertSound: Sound | null = null;
+let alertSound: Audio.Sound | null = null;
 let isPlaying = false;
 let foregroundServiceStarted = false;
 
@@ -111,37 +116,44 @@ async function stopForegroundService() {
 export async function setupPersistentAudio() {
   if (Platform.OS !== 'android') return;
 
-  return new Promise<void>((resolve, reject) => {
-    try {
-      console.log('🎵 [PersistentAudio] Setting up native sound...');
+  try {
+    console.log('🎵 [PersistentAudio] Setting up expo-av audio...');
 
-      // Enable playback in silence mode (iOS) and background (Android)
-      Sound.setCategory('Playback', true);
+    // Set audio mode for background playback
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      staysActiveInBackground: true, // CRITICAL for background audio
+      playsInSilentModeIOS: true,
+      shouldDuckAndroid: false,
+      playThroughEarpieceAndroid: false,
+    });
 
-      // Load the alert sound
-      alertSound = new Sound('new_booking.wav', Sound.MAIN_BUNDLE, (error) => {
-        if (error) {
-          console.error('❌ [PersistentAudio] Failed to load sound:', error);
-          reject(error);
-          return;
-        }
+    // Load the alert sound using Expo's asset system
+    // This properly handles the asset bundling
+    const { sound } = await Audio.Sound.createAsync(
+      require('../assets/notification/new_booking.wav'),
+      {
+        shouldPlay: false,
+        isLooping: true, // CRITICAL: Set to loop infinitely
+        volume: 1.0,
+      }
+    );
 
-        console.log('✅ [PersistentAudio] Sound loaded successfully');
-        console.log('[PersistentAudio] Duration:', alertSound?.getDuration(), 'seconds');
+    alertSound = sound;
 
-        // Set to loop infinitely
-        alertSound?.setNumberOfLoops(-1); // -1 = infinite loop
-
-        // Set volume to maximum
-        alertSound?.setVolume(1.0);
-
-        resolve();
-      });
-    } catch (error) {
-      console.error('❌ [PersistentAudio] Setup error:', error);
-      reject(error);
+    const status = await sound.getStatusAsync();
+    if (status.isLoaded) {
+      console.log('✅ [PersistentAudio] Sound loaded successfully');
+      console.log('[PersistentAudio] Duration:', (status.durationMillis ?? 0) / 1000, 'seconds');
     }
-  });
+  } catch (error) {
+    console.error('❌ [PersistentAudio] Setup error:', error);
+    console.error('[PersistentAudio] Error details:', {
+      message: (error as Error).message,
+      stack: (error as Error).stack
+    });
+    throw error;
+  }
 }
 
 /**
@@ -170,10 +182,11 @@ export async function startPersistentAlert(bookingId: string): Promise<void> {
 
     // If already playing, no need to restart audio
     if (isPlaying && alertSound) {
-      alertSound.getCurrentTime((seconds) => {
-        console.log('[PersistentAudio] ✅ Audio already playing continuously at', seconds, 'seconds');
-      });
-      return;
+      const status = await alertSound.getStatusAsync();
+      if (status.isLoaded && status.isPlaying) {
+        console.log('[PersistentAudio] ✅ Audio already playing continuously at', status.positionMillis / 1000, 'seconds');
+        return;
+      }
     }
 
     // Ensure sound is loaded
@@ -189,20 +202,7 @@ export async function startPersistentAlert(bookingId: string): Promise<void> {
     console.log('[PersistentAudio] 🎵 Starting continuous looping audio...');
 
     // Start playback (now protected by foreground service!)
-    alertSound.play((success) => {
-      if (success) {
-        console.log('[PersistentAudio] ✅ Audio playback completed successfully (will loop)');
-      } else {
-        console.error('[PersistentAudio] ❌ Audio playback failed');
-        isPlaying = false;
-
-        // Try to restart
-        alertSound?.reset();
-        alertSound?.play(() => {
-          console.log('[PersistentAudio] 🔄 Audio restarted after failure');
-        });
-      }
-    });
+    await alertSound.playAsync();
 
     isPlaying = true;
     console.log('[PersistentAudio] ✅ Started continuous looping audio with foreground service!');
@@ -238,8 +238,8 @@ export async function stopPersistentAlert(bookingId: string): Promise<void> {
       console.log('[PersistentAudio] No more active bookings, stopping audio and service');
 
       // Stop audio
-      alertSound.pause();
-      alertSound.setCurrentTime(0); // Reset to beginning
+      await alertSound.stopAsync();
+      await alertSound.setPositionAsync(0); // Reset to beginning
       isPlaying = false;
 
       // CRITICAL: Stop foreground service to free resources
@@ -266,17 +266,23 @@ export async function getAudioStatus(): Promise<{
 } | null> {
   if (Platform.OS !== 'android' || !alertSound) return null;
 
-  return new Promise((resolve) => {
-    alertSound?.getCurrentTime((seconds) => {
-      resolve({
+  try {
+    const status = await alertSound.getStatusAsync();
+
+    if (status.isLoaded) {
+      return {
         isPlaying,
         activeBookings: activeBookingSounds.size,
         bookingIds: Array.from(activeBookingSounds),
-        currentTime: seconds,
-        duration: alertSound?.getDuration()
-      });
-    });
-  });
+        currentTime: status.positionMillis / 1000,
+        duration: (status.durationMillis ?? 0) / 1000
+      };
+    }
+  } catch (error) {
+    console.error('[PersistentAudio] Error getting status:', error);
+  }
+
+  return null;
 }
 
 /**
@@ -290,8 +296,7 @@ export async function cleanupPersistentAudio(): Promise<void> {
     console.log('[PersistentAudio] Cleaning up...');
 
     if (alertSound) {
-      alertSound.stop();
-      alertSound.release();
+      await alertSound.unloadAsync();
       alertSound = null;
     }
 
