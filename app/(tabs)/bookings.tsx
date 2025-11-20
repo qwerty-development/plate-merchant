@@ -1,13 +1,13 @@
+/* eslint-disable import/no-unresolved */
 import AnalyticsCards from '@/components/bookings/analytics-cards';
 import BookingCard from '@/components/bookings/booking-card';
 import FilterControls from '@/components/bookings/filter-controls';
 import { useRestaurant } from '@/contexts/restaurant-context';
 import { useBatteryOptimization } from '@/hooks/use-battery-optimization';
-import { useBookingNotification } from '@/hooks/use-booking-notification';
 import { useNotifeeForegroundService } from '@/hooks/use-notifee-foreground-service';
 import { setBadgeCount } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
-import { triggerBookingAlert, stopBookingAlert } from '@/services/booking-alert-manager';
+import { stopBookingAlert, triggerBookingAlert } from '@/services/booking-alert-manager';
 import { initializeFCM } from '@/services/fcm-service';
 import { startPersistentAlert, stopPersistentAlert } from '@/services/persistent-audio-manager';
 import { BookingUpdatePayload } from '@/types/database';
@@ -34,7 +34,6 @@ type DateFilter = 'today' | 'week' | 'month' | 'all' | 'custom';
 export default function BookingsScreen() {
   const { restaurant } = useRestaurant();
   const queryClient = useQueryClient();
-  const { playSound, markBookingHandled } = useBookingNotification();
   const { isServiceRunning, updateServiceNotification } = useNotifeeForegroundService(true);
   const {
     isOptimized,
@@ -78,19 +77,17 @@ export default function BookingsScreen() {
 
   const handleAccept = useCallback((bookingId: string) => {
     console.log('✅ Accepting booking:', bookingId);
-    markBookingHandled(bookingId);
     stopBookingAlert(bookingId);
     stopPersistentAlert(bookingId);
     updateBooking({ bookingId, status: 'confirmed' });
-  }, [markBookingHandled, updateBooking]);
+  }, [updateBooking]);
 
   const handleDecline = useCallback((bookingId: string, note?: string) => {
     console.log('❌ Declining booking:', bookingId);
-    markBookingHandled(bookingId);
     stopBookingAlert(bookingId);
     stopPersistentAlert(bookingId);
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
-  }, [markBookingHandled, updateBooking]);
+  }, [updateBooking]);
 
   // Initialize FCM when restaurant is loaded
   useEffect(() => {
@@ -214,7 +211,7 @@ export default function BookingsScreen() {
   }, [bookings]);
 
   // Stop sounds and alerts when bookings are handled
-  // Note: FCM handles triggering notifications for NEW bookings
+  // AND trigger sounds for new bookings that arrive while app is open
   useEffect(() => {
     if (!bookings) return;
     const currentPendingIds = new Set(bookings.filter(b => b.status === 'pending').map(b => b.id));
@@ -230,27 +227,71 @@ export default function BookingsScreen() {
     if (handledPendingIds.length > 0) {
       handledPendingIds.forEach(id => {
         console.log('✅ Booking handled:', id);
-        markBookingHandled(id);
         stopBookingAlert(id);
         stopPersistentAlert(id);
       });
     }
 
-    previousPendingIdsRef.current = currentPendingIds;
-  }, [bookings, markBookingHandled]);
+    // Detect NEW pending bookings (arrived while app was open)
+    const newPendingIds = Array.from(currentPendingIds).filter(id => !previousPendingIdsRef.current.has(id));
+    if (newPendingIds.length > 0) {
+      console.log('🎉 [Bookings] New pending bookings detected:', newPendingIds);
+      newPendingIds.forEach(id => {
+        const booking = bookings.find(b => b.id === id);
+        if (booking) {
+          console.log(`🔊 [Bookings] Triggering alert for NEW booking: ${booking.id}`);
+          
+          // Start persistent audio alert
+          startPersistentAlert(booking.id).catch(err => {
+            console.error(`❌ [Bookings] Error starting audio for ${booking.id}:`, err);
+          });
+
+          // Trigger visual alert
+          const guestName = booking.profiles?.name || 'Guest';
+          const partySize = booking.party_size || 1;
+          const bookingTime = booking.booking_time ?
+            new Date(booking.booking_time).toLocaleTimeString('en-US', {
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true
+            }) : '';
+
+          triggerBookingAlert(booking.id, guestName, partySize, bookingTime).catch(err => {
+            console.error(`❌ [Bookings] Error triggering alert for ${booking.id}:`, err);
+          });
+        }
+      });
+    }
+
+  }, [bookings]);
 
   // Listen for ANY booking changes to refresh the UI
   useEffect(() => {
-    if (!restaurant?.id) return;
+    console.log('🔌 Setting up Supabase Realtime subscription for bookings...');
+    
     const channel = supabase
-      .channel(`bookings-ui-listener-${restaurant.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings', filter: `restaurant_id=eq.${restaurant.id}` },
-        () => {
-          console.log('📨 [UI] Change detected, invalidating bookings query.');
+      .channel('bookings-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'bookings',
+          filter: restaurant?.id ? `restaurant_id=eq.${restaurant.id}` : undefined,
+        },
+        (payload) => {
+          console.log('🔄 [Realtime] Booking change received:', payload.eventType);
+          // Invalidate queries to refresh data
           queryClient.invalidateQueries({ queryKey: ['bookings'] });
-        })
-      .subscribe();
+          queryClient.invalidateQueries({ queryKey: ['booking-stats'] });
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔌 [Realtime] Subscription status:', status);
+      });
+
     return () => {
+      console.log('🔌 [Realtime] Cleaning up subscription');
       supabase.removeChannel(channel);
     };
   }, [restaurant?.id, queryClient]);
@@ -321,6 +362,24 @@ export default function BookingsScreen() {
             )}
             <TouchableOpacity className="bg-background/20 rounded-full p-2" onPress={() => setShowAnalytics(!showAnalytics)}>
               <MaterialIcons name={showAnalytics ? "expand-less" : "expand-more"} size={24} color="#ffece2" />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              className="bg-red-500/30 rounded-full px-3 py-1 ml-1"
+              onPress={() => {
+                console.log('🔊 Testing sound...');
+                startPersistentAlert('test-booking-id');
+                setTimeout(() => {
+                  Alert.alert(
+                    'Sound Test',
+                    'Is the sound playing?',
+                    [
+                      { text: 'Stop', onPress: () => stopPersistentAlert('test-booking-id') }
+                    ]
+                  );
+                }, 500);
+              }}
+            >
+              <Text className="text-background text-xs font-bold">Test Sound</Text>
             </TouchableOpacity>
           </View>
         </View>
