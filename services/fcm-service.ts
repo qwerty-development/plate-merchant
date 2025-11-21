@@ -8,12 +8,11 @@
  * 4. Triggering notifications and sounds when FCM messages arrive
  */
 
+import { supabase } from '@/lib/supabase';
 import messaging from '@react-native-firebase/messaging';
 import { Platform } from 'react-native';
-import { supabase } from '@/lib/supabase';
-import { startPersistentAlert } from './persistent-audio-manager';
-import { triggerBookingAlert } from './booking-alert-manager';
-import notifee from '@notifee/react-native';
+import { stopBookingAlert, triggerBookingAlert } from './booking-alert-manager';
+import { startPersistentAlert, stopPersistentAlert } from './persistent-audio-manager';
 
 /**
  * Request notification permissions and get FCM token
@@ -122,29 +121,39 @@ export function setupBackgroundMessageHandler() {
     try {
       const data = remoteMessage.data;
 
-      if (!data || data.type !== 'new_booking') {
-        console.log('⏭️ [FCM Background] Not a booking message');
-        return;
+      if (!data) return;
+
+      // Handle NEW BOOKING
+      if (data.type === 'new_booking') {
+        const bookingId = data.bookingId as string;
+        const guestName = data.guestName as string;
+        const partySize = parseInt(data.partySize as string) || 1;
+        const bookingTime = data.bookingTime as string;
+
+        console.log('🎉 [FCM Background] New booking:', { bookingId, guestName, partySize });
+
+        // Start persistent audio alert
+        startPersistentAlert(bookingId).catch(err => {
+          console.error('❌ [FCM Background] Audio error:', err);
+        });
+
+        // Trigger Notifee booking alert
+        triggerBookingAlert(bookingId, guestName, partySize, bookingTime).catch(err => {
+          console.error('❌ [FCM Background] Alert error:', err);
+        });
+
+        console.log('✅ [FCM Background] Notification and sound triggered');
+      } 
+      // Handle BOOKING CANCELLED / HANDLED
+      else if (data.type === 'booking_cancelled' || data.type === 'booking_handled') {
+        const bookingId = data.bookingId as string;
+        console.log('🛑 [FCM Background] Booking cancelled/handled:', bookingId);
+        
+        if (bookingId) {
+          await stopPersistentAlert(bookingId);
+          await stopBookingAlert(bookingId);
+        }
       }
-
-      const bookingId = data.bookingId as string;
-      const guestName = data.guestName as string;
-      const partySize = parseInt(data.partySize as string) || 1; // Fallback to 1 if NaN
-      const bookingTime = data.bookingTime as string;
-
-      console.log('🎉 [FCM Background] New booking:', { bookingId, guestName, partySize });
-
-      // Start persistent audio alert (native audio, works in background)
-      startPersistentAlert(bookingId).catch(err => {
-        console.error('❌ [FCM Background] Audio error:', err);
-      });
-
-      // Trigger Notifee booking alert with actions (don't let it block sound)
-      triggerBookingAlert(bookingId, guestName, partySize, bookingTime).catch(err => {
-        console.error('❌ [FCM Background] Alert error:', err);
-      });
-
-      console.log('✅ [FCM Background] Notification and sound triggered');
     } catch (error) {
       console.error('❌ [FCM Background] Error handling message:', error);
     }
@@ -164,29 +173,39 @@ export function setupForegroundMessageHandler() {
     try {
       const data = remoteMessage.data;
 
-      if (!data || data.type !== 'new_booking') {
-        console.log('⏭️ [FCM Foreground] Not a booking message');
-        return;
+      if (!data) return;
+
+      // Handle NEW BOOKING
+      if (data.type === 'new_booking') {
+        const bookingId = data.bookingId as string;
+        const guestName = data.guestName as string;
+        const partySize = parseInt(data.partySize as string) || 1;
+        const bookingTime = data.bookingTime as string;
+
+        console.log('🎉 [FCM Foreground] New booking:', { bookingId, guestName, partySize });
+
+        // Start persistent audio alert
+        startPersistentAlert(bookingId).catch(err => {
+          console.error('❌ [FCM Foreground] Audio error:', err);
+        });
+
+        // Trigger Notifee booking alert
+        triggerBookingAlert(bookingId, guestName, partySize, bookingTime).catch(err => {
+          console.error('❌ [FCM Foreground] Alert error:', err);
+        });
+
+        console.log('✅ [FCM Foreground] Notification and sound triggered');
       }
-
-      const bookingId = data.bookingId as string;
-      const guestName = data.guestName as string;
-      const partySize = parseInt(data.partySize as string) || 1; // Fallback to 1 if NaN
-      const bookingTime = data.bookingTime as string;
-
-      console.log('🎉 [FCM Foreground] New booking:', { bookingId, guestName, partySize });
-
-      // Start persistent audio alert (native audio, works in background)
-      startPersistentAlert(bookingId).catch(err => {
-        console.error('❌ [FCM Foreground] Audio error:', err);
-      });
-
-      // Trigger Notifee booking alert (this already displays the notification, no need for duplicate)
-      triggerBookingAlert(bookingId, guestName, partySize, bookingTime).catch(err => {
-        console.error('❌ [FCM Foreground] Alert error:', err);
-      });
-
-      console.log('✅ [FCM Foreground] Notification and sound triggered');
+      // Handle BOOKING CANCELLED / HANDLED
+      else if (data.type === 'booking_cancelled' || data.type === 'booking_handled') {
+        const bookingId = data.bookingId as string;
+        console.log('🛑 [FCM Foreground] Booking cancelled/handled:', bookingId);
+        
+        if (bookingId) {
+          await stopPersistentAlert(bookingId);
+          await stopBookingAlert(bookingId);
+        }
+      }
     } catch (error) {
       console.error('❌ [FCM Foreground] Error handling message:', error);
     }

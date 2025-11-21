@@ -18,15 +18,16 @@ import { startOfDay } from 'date-fns/startOfDay';
 import * as Notifications from 'expo-notifications';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Platform,
-  RefreshControl,
-  ScrollView,
-  Text,
-  ToastAndroid,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    AppState,
+    Platform,
+    RefreshControl,
+    ScrollView,
+    Text,
+    ToastAndroid,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 
 type DateFilter = 'today' | 'week' | 'month' | 'all' | 'custom';
@@ -290,9 +291,19 @@ export default function BookingsScreen() {
         console.log('🔌 [Realtime] Subscription status:', status);
       });
 
+    // Add AppState listener to refetch on resume
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active') {
+        console.log('📱 App came to foreground, refreshing bookings...');
+        queryClient.invalidateQueries({ queryKey: ['bookings'] });
+        queryClient.invalidateQueries({ queryKey: ['booking-stats'] });
+      }
+    });
+
     return () => {
       console.log('🔌 [Realtime] Cleaning up subscription');
       supabase.removeChannel(channel);
+      subscription.remove();
     };
   }, [restaurant?.id, queryClient]);
 

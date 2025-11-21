@@ -16,17 +16,19 @@
  * during the EAS build process. This guarantees react-native-sound can find it.
  */
 
-import Sound from 'react-native-sound';
+import notifee, { AndroidCategory, AndroidImportance } from '@notifee/react-native';
 import { Platform } from 'react-native';
-import notifee, { AndroidImportance, AndroidCategory } from '@notifee/react-native';
+import Sound from 'react-native-sound';
 
 const activeBookingSounds = new Set<string>();
 let alertSound: Sound | null = null;
 let isPlaying = false;
 let foregroundServiceStarted = false;
 
+// UNIFIED IDs - Must match use-notifee-foreground-service.ts for Notification ID
+// But use a DIFFERENT Channel ID for High Importance alerts
 const CHANNEL_ID = 'booking-alert-channel';
-const NOTIFICATION_ID = 'booking-alert-notification';
+const NOTIFICATION_ID = 'plate-foreground-service-notification';
 
 /**
  * Create notification channel for foreground service

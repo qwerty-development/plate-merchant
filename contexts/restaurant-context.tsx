@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { startBookingStatusMonitor, stopBookingStatusMonitor } from '@/services/booking-status-monitor';
 import { Restaurant } from '@/types/database';
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useAuth } from './auth-context';
@@ -73,6 +74,16 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     fetchRestaurant();
   }, [user]);
+
+  // Start/Stop global booking status monitor
+  useEffect(() => {
+    if (restaurant?.id) {
+      startBookingStatusMonitor(restaurant.id);
+    } else {
+      stopBookingStatusMonitor();
+    }
+    return () => stopBookingStatusMonitor();
+  }, [restaurant?.id]);
 
   const value = {
     restaurant,
