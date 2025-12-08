@@ -63,6 +63,7 @@
       "expo-router",
       "@react-native-firebase/app",
       "./plugins/withAndroidManifestFix",
+      "./plugins/withNotificationSound",
       [
         "expo-splash-screen",
         {

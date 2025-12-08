@@ -144,6 +144,37 @@ export function setupBackgroundMessageHandler() {
 
         console.log('🎉 [FCM Background] New booking:', { bookingId, guestName, partySize });
 
+        // Format time
+        let formattedTime = '';
+        try {
+          formattedTime = new Date(bookingTime).toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          });
+        } catch {}
+
+        // Show notification directly using expo-notifications (works in killed state)
+        const Notifications = require('expo-notifications').default;
+        await Notifications.scheduleNotificationAsync({
+          identifier: `booking_${bookingId}`,
+          content: {
+            title: 'New booking – Plate',
+            body: `${guestName} • ${partySize} ${partySize === 1 ? 'guest' : 'guests'} at ${formattedTime}`,
+            data: {
+              bookingId: bookingId,
+              type: 'NEW_BOOKING',
+            },
+            sound: 'new_booking.wav',
+            priority: Notifications.AndroidNotificationPriority.MAX,
+            categoryIdentifier: 'BOOKING_ACTION',
+            badge: 1,
+            channelId: 'plate_bookings', // Explicit channel ID
+          },
+          trigger: null,
+        });
+
+        // Also call displayNewBookingNotification to set up re-triggering
         const notificationData: BookingNotificationData = {
           booking_id: bookingId,
           restaurant_id: restaurantId,
@@ -153,7 +184,7 @@ export function setupBackgroundMessageHandler() {
         };
         
         await displayNewBookingNotification(notificationData).catch(err => {
-          console.error('❌ [FCM Background] Notification error:', err);
+          console.error('❌ [FCM Background] Re-trigger setup error:', err);
         });
 
         console.log('✅ [FCM Background] Notification triggered');
