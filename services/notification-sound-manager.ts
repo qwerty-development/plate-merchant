@@ -2,7 +2,8 @@
 
 import { Audio } from 'expo-av';
 
-const SOUND_FILE = require('@/assets/notification/new_booking.wav');
+// Load sound file asset
+const SOUND_FILE_MODULE = require('@/assets/notification/new_booking.wav');
 let sound: Audio.Sound | null = null;
 const activeBookingSounds = new Set<string>();
 
@@ -66,31 +67,73 @@ export async function playNotificationSound(bookingId: string) {
     }
 
     console.log('[SoundManager] 🎵 Loading and playing notification sound...');
+    console.log('[SoundManager] Sound file module type:', typeof SOUND_FILE_MODULE);
+    console.log('[SoundManager] Sound file module value:', SOUND_FILE_MODULE);
 
     // Re-ensure audio mode (in case it was reset)
     await setupAudio();
 
-    const { sound: newSound } = await Audio.Sound.createAsync(
-      SOUND_FILE,
-      {
-        shouldPlay: true,
-        isLooping: true, // Loop continuously until explicitly stopped
-        volume: 1.0, // Maximum volume
-      },
-      (status) => {
-        // Status callback for debugging
-        if (!status.isLoaded) {
-          console.error('[SoundManager] Sound failed to load:', status);
-        } else {
-          console.log('[SoundManager] Sound status update:', {
-            isPlaying: (status as any).isPlaying,
-            isLooping: (status as any).isLooping,
-            positionMillis: (status as any).positionMillis,
-            durationMillis: (status as any).durationMillis
-          });
-        }
+    // Determine the correct sound source format
+    let soundSource: any;
+    
+    if (typeof SOUND_FILE_MODULE === 'number') {
+      // It's an asset ID (most common case)
+      soundSource = SOUND_FILE_MODULE;
+      console.log('[SoundManager] Using asset ID directly:', soundSource);
+    } else if (typeof SOUND_FILE_MODULE === 'object') {
+      // It might be an object with uri or other properties
+      if (SOUND_FILE_MODULE.uri) {
+        soundSource = { uri: SOUND_FILE_MODULE.uri };
+        console.log('[SoundManager] Using URI from object:', soundSource);
+      } else {
+        // Try using the module directly
+        soundSource = SOUND_FILE_MODULE;
+        console.log('[SoundManager] Using module object directly:', soundSource);
       }
-    );
+    } else {
+      throw new Error(`Unexpected sound file module type: ${typeof SOUND_FILE_MODULE}`);
+    }
+
+    console.log('[SoundManager] Final sound source:', soundSource);
+
+    try {
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        soundSource,
+        {
+          shouldPlay: true,
+          isLooping: true, // Loop continuously until explicitly stopped
+          volume: 1.0, // Maximum volume
+        },
+        (status) => {
+          // Status callback for debugging
+          if (!status.isLoaded) {
+            console.error('[SoundManager] Sound failed to load in callback:', status);
+            if ((status as any).error) {
+              console.error('[SoundManager] Load error details:', (status as any).error);
+            }
+          } else {
+            console.log('[SoundManager] ✅ Sound loaded successfully! Status:', {
+              isPlaying: (status as any).isPlaying,
+              isLooping: (status as any).isLooping,
+              positionMillis: (status as any).positionMillis,
+              durationMillis: (status as any).durationMillis
+            });
+          }
+        }
+      );
+
+      // Verify it loaded
+      const status = await newSound.getStatusAsync();
+      if (!status.isLoaded) {
+        throw new Error(`Sound failed to load. Status: ${JSON.stringify(status)}`);
+      }
+
+      sound = newSound;
+      console.log('[SoundManager] ✅ Sound started playing in continuous loop!');
+    } catch (createError) {
+      console.error('[SoundManager] ❌ Error creating sound:', createError);
+      throw createError;
+    }
 
     sound = newSound;
     console.log('[SoundManager] ✅ Sound started playing in continuous loop!');

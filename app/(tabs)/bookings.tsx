@@ -7,9 +7,10 @@ import { useBatteryOptimization } from '@/hooks/use-battery-optimization';
 // Foreground service removed - using expo-notifications instead
 import { setBadgeCount } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
-import { stopBookingAlert, triggerBookingAlert } from '@/services/booking-alert-manager';
-import { cancelBookingNotification, resolveBookingNotification } from '@/services/booking-notification-service';
+import { stopBookingAlert } from '@/services/booking-alert-manager';
+import { cancelBookingNotification, displayNewBookingNotification, resolveBookingNotification } from '@/services/booking-notification-service';
 import { initializeFCM } from '@/services/fcm-service';
+import { playNotificationSound, setupAudio, stopNotificationSound } from '@/services/notification-sound-manager';
 import { BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -92,6 +93,31 @@ export default function BookingsScreen() {
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
   }, [updateBooking]);
 
+  // Test sound function
+  const [isSoundPlaying, setIsSoundPlaying] = useState(false);
+  const testSoundId = 'test-sound-123';
+  
+  const handleTestSound = useCallback(async () => {
+    try {
+      if (isSoundPlaying) {
+        // Stop sound
+        await stopNotificationSound(testSoundId);
+        setIsSoundPlaying(false);
+        showToast('Sound stopped');
+      } else {
+        // Setup audio first
+        await setupAudio();
+        // Play sound
+        await playNotificationSound(testSoundId);
+        setIsSoundPlaying(true);
+        showToast('Sound playing (looping)...');
+      }
+    } catch (error) {
+      console.error('❌ Test sound error:', error);
+      showToast(`Sound error: ${(error as Error).message}`);
+    }
+  }, [isSoundPlaying]);
+
   // Initialize FCM when restaurant is loaded
   useEffect(() => {
     if (restaurant?.id && Platform.OS === 'android') {
@@ -172,31 +198,32 @@ export default function BookingsScreen() {
 
   // Trigger sound/alerts for existing pending bookings on initial load
   useEffect(() => {
-    if (!bookings || !isInitialLoadRef.current) return;
+    if (!bookings || !isInitialLoadRef.current || !restaurant?.id) return;
 
     const pendingBookings = bookings.filter(b => b.status === 'pending');
     if (pendingBookings.length > 0) {
-      console.log(`🔊 [Bookings] Found ${pendingBookings.length} existing pending bookings, triggering alerts`);
+      console.log(`🔊 [Bookings] Found ${pendingBookings.length} existing pending bookings, starting sounds`);
 
-      // Trigger alerts for each pending booking
+      // Trigger notifications and sounds for each pending booking
       pendingBookings.forEach(booking => {
-        console.log(`🎉 [Bookings] Triggering alert for existing booking: ${booking.id}`);
+        console.log(`🎉 [Bookings] Starting sound for existing pending booking: ${booking.id}`);
 
         const guestName = booking.profiles?.name || 'Guest';
         const partySize = booking.party_size || 1;
-        const bookingTime = booking.booking_time ?
-          new Date(booking.booking_time).toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
-          }) : '';
+        const bookingTime = booking.booking_time || new Date().toISOString();
 
-        triggerBookingAlert(booking.id, guestName, partySize, bookingTime).catch(err => {
-          console.error(`❌ [Bookings] Error triggering alert for ${booking.id}:`, err);
+        displayNewBookingNotification({
+          booking_id: booking.id,
+          restaurant_id: restaurant.id,
+          guest_name: guestName,
+          guest_count: partySize,
+          booking_time: bookingTime,
+        }).catch(err => {
+          console.error(`❌ [Bookings] Error starting notification/sound for ${booking.id}:`, err);
         });
       });
     }
-  }, [bookings]);
+  }, [bookings, restaurant?.id]);
 
   // Stop sounds and alerts when bookings are handled
   // AND trigger sounds for new bookings that arrive while app is open
@@ -221,30 +248,31 @@ export default function BookingsScreen() {
 
     // Detect NEW pending bookings (arrived while app was open)
     const newPendingIds = Array.from(currentPendingIds).filter(id => !previousPendingIdsRef.current.has(id));
-    if (newPendingIds.length > 0) {
+    if (newPendingIds.length > 0 && restaurant?.id) {
       console.log('🎉 [Bookings] New pending bookings detected:', newPendingIds);
       newPendingIds.forEach(id => {
         const booking = bookings.find(b => b.id === id);
         if (booking) {
-          console.log(`🔊 [Bookings] Triggering alert for NEW booking: ${booking.id}`);
+          console.log(`🔊 [Bookings] Starting notification and sound for NEW booking: ${booking.id}`);
           
           const guestName = booking.profiles?.name || 'Guest';
           const partySize = booking.party_size || 1;
-          const bookingTime = booking.booking_time ?
-            new Date(booking.booking_time).toLocaleTimeString('en-US', {
-              hour: 'numeric',
-              minute: '2-digit',
-              hour12: true
-            }) : '';
+          const bookingTime = booking.booking_time || new Date().toISOString();
 
-          triggerBookingAlert(booking.id, guestName, partySize, bookingTime).catch(err => {
-            console.error(`❌ [Bookings] Error triggering alert for ${booking.id}:`, err);
+          displayNewBookingNotification({
+            booking_id: booking.id,
+            restaurant_id: restaurant.id,
+            guest_name: guestName,
+            guest_count: partySize,
+            booking_time: bookingTime,
+          }).catch(err => {
+            console.error(`❌ [Bookings] Error starting notification/sound for ${booking.id}:`, err);
           });
         }
       });
     }
 
-  }, [bookings]);
+  }, [bookings, restaurant?.id]);
 
   // Listen for ANY booking changes to refresh the UI and update notifications
   useEffect(() => {
@@ -391,6 +419,14 @@ export default function BookingsScreen() {
             <Text className="text-background/80 mt-1">Manage reservation requests</Text>
           </View>
           <View className="flex-row gap-2 items-center">
+            {/* Test Sound Button */}
+            <TouchableOpacity 
+              className={`rounded-full px-3 py-1.5 flex-row items-center gap-1 ${isSoundPlaying ? 'bg-red-500/30' : 'bg-green-500/30'}`}
+              onPress={handleTestSound}
+            >
+              <MaterialIcons name={isSoundPlaying ? "stop" : "volume-up"} size={14} color="#ffece2" />
+              <Text className="text-background text-xs font-medium">{isSoundPlaying ? 'Stop' : 'Test Sound'}</Text>
+            </TouchableOpacity>
             {isOptimized && Platform.OS === 'android' && (
               <TouchableOpacity className="bg-orange-500/30 rounded-full px-2 py-1 flex-row items-center gap-1" onPress={showBatteryOptimizationGuide}>
                 <MaterialIcons name="battery-alert" size={12} color="#ffece2" />
