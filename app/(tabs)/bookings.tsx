@@ -4,18 +4,19 @@ import BookingCard from '@/components/bookings/booking-card';
 import FilterControls from '@/components/bookings/filter-controls';
 import { useRestaurant } from '@/contexts/restaurant-context';
 import { useBatteryOptimization } from '@/hooks/use-battery-optimization';
-import { useNotifeeForegroundService } from '@/hooks/use-notifee-foreground-service';
+// Foreground service removed - using expo-notifications instead
 import { setBadgeCount } from '@/hooks/use-push-notifications';
 import { supabase } from '@/lib/supabase';
 import { stopBookingAlert, triggerBookingAlert } from '@/services/booking-alert-manager';
+import { cancelBookingNotification, resolveBookingNotification } from '@/services/booking-notification-service';
 import { initializeFCM } from '@/services/fcm-service';
-import { startPersistentAlert, stopPersistentAlert } from '@/services/persistent-audio-manager';
 import { BookingUpdatePayload } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { endOfDay } from 'date-fns/endOfDay';
 import { startOfDay } from 'date-fns/startOfDay';
 import * as Notifications from 'expo-notifications';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -33,9 +34,10 @@ import {
 type DateFilter = 'today' | 'week' | 'month' | 'all' | 'custom';
 
 export default function BookingsScreen() {
-  const { restaurant } = useRestaurant();
+  const { restaurant, restaurants, loading } = useRestaurant();
+  const router = useRouter();
   const queryClient = useQueryClient();
-  const { isServiceRunning, updateServiceNotification } = useNotifeeForegroundService(true);
+  // Foreground service removed - notifications work via FCM
   const {
     isOptimized,
     requestBatteryOptimizationExemption,
@@ -76,17 +78,17 @@ export default function BookingsScreen() {
     }
   }, [queryClient]);
 
-  const handleAccept = useCallback((bookingId: string) => {
+  const handleAccept = useCallback(async (bookingId: string) => {
     console.log('✅ Accepting booking:', bookingId);
     stopBookingAlert(bookingId);
-    stopPersistentAlert(bookingId);
+    await resolveBookingNotification(bookingId, 'confirmed');
     updateBooking({ bookingId, status: 'confirmed' });
   }, [updateBooking]);
 
-  const handleDecline = useCallback((bookingId: string, note?: string) => {
+  const handleDecline = useCallback(async (bookingId: string, note?: string) => {
     console.log('❌ Declining booking:', bookingId);
     stopBookingAlert(bookingId);
-    stopPersistentAlert(bookingId);
+    await resolveBookingNotification(bookingId, 'declined_by_restaurant');
     updateBooking({ bookingId, status: 'declined_by_restaurant', note });
   }, [updateBooking]);
 
@@ -161,21 +163,12 @@ export default function BookingsScreen() {
     enabled: !!restaurant?.id,
   });
 
-  // Update foreground service notification and badge count
+  // Update badge count
   useEffect(() => {
-    if (!isServiceRunning || !bookings) return;
+    if (!bookings) return;
     const pendingCount = bookings.filter(b => b.status === 'pending').length;
     setBadgeCount(pendingCount);
-    if (pendingCount > 0) {
-      updateServiceNotification(
-        `🔔 ${pendingCount} Pending ${pendingCount === 1 ? 'Booking' : 'Bookings'}`,
-        'Tap to view and respond',
-        pendingCount
-      );
-    } else {
-      updateServiceNotification('✅ All Caught Up!', 'Listening for new requests');
-    }
-  }, [bookings, isServiceRunning, updateServiceNotification]);
+  }, [bookings]);
 
   // Trigger sound/alerts for existing pending bookings on initial load
   useEffect(() => {
@@ -185,16 +178,10 @@ export default function BookingsScreen() {
     if (pendingBookings.length > 0) {
       console.log(`🔊 [Bookings] Found ${pendingBookings.length} existing pending bookings, triggering alerts`);
 
-      // Trigger sound and alerts for each pending booking
+      // Trigger alerts for each pending booking
       pendingBookings.forEach(booking => {
         console.log(`🎉 [Bookings] Triggering alert for existing booking: ${booking.id}`);
 
-        // Start persistent audio alert (non-blocking)
-        startPersistentAlert(booking.id).catch(err => {
-          console.error(`❌ [Bookings] Error starting audio for ${booking.id}:`, err);
-        });
-
-        // Trigger alert (non-blocking)
         const guestName = booking.profiles?.name || 'Guest';
         const partySize = booking.party_size || 1;
         const bookingTime = booking.booking_time ?
@@ -229,7 +216,6 @@ export default function BookingsScreen() {
       handledPendingIds.forEach(id => {
         console.log('✅ Booking handled:', id);
         stopBookingAlert(id);
-        stopPersistentAlert(id);
       });
     }
 
@@ -242,12 +228,6 @@ export default function BookingsScreen() {
         if (booking) {
           console.log(`🔊 [Bookings] Triggering alert for NEW booking: ${booking.id}`);
           
-          // Start persistent audio alert
-          startPersistentAlert(booking.id).catch(err => {
-            console.error(`❌ [Bookings] Error starting audio for ${booking.id}:`, err);
-          });
-
-          // Trigger visual alert
           const guestName = booking.profiles?.name || 'Guest';
           const partySize = booking.party_size || 1;
           const bookingTime = booking.booking_time ?
@@ -266,7 +246,7 @@ export default function BookingsScreen() {
 
   }, [bookings]);
 
-  // Listen for ANY booking changes to refresh the UI
+  // Listen for ANY booking changes to refresh the UI and update notifications
   useEffect(() => {
     console.log('🔌 Setting up Supabase Realtime subscription for bookings...');
     
@@ -280,8 +260,32 @@ export default function BookingsScreen() {
           table: 'bookings',
           filter: restaurant?.id ? `restaurant_id=eq.${restaurant.id}` : undefined,
         },
-        (payload) => {
+        async (payload) => {
           console.log('🔄 [Realtime] Booking change received:', payload.eventType);
+          
+          // Handle notification updates when booking status changes
+          if (payload.eventType === 'UPDATE' && payload.new && payload.old) {
+            const oldStatus = payload.old.status;
+            const newStatus = payload.new.status;
+            const bookingId = payload.new.id as string;
+
+            // If booking was pending and is now accepted/declined, update notification
+            if (oldStatus === 'pending' && (newStatus === 'confirmed' || newStatus === 'declined_by_restaurant')) {
+              console.log('📱 [Realtime] Booking status changed, updating notification:', bookingId, newStatus);
+              
+              if (newStatus === 'confirmed') {
+                await resolveBookingNotification(bookingId, 'confirmed');
+              } else if (newStatus === 'declined_by_restaurant') {
+                await resolveBookingNotification(bookingId, 'declined_by_restaurant');
+              }
+            }
+            // If booking was cancelled or completed, cancel notification
+            else if (newStatus === 'cancelled_by_user' || newStatus === 'cancelled_by_restaurant' || newStatus === 'completed') {
+              console.log('📱 [Realtime] Booking cancelled/completed, cancelling notification:', bookingId);
+              await cancelBookingNotification(bookingId);
+            }
+          }
+          
           // Invalidate queries to refresh data
           queryClient.invalidateQueries({ queryKey: ['bookings'] });
           queryClient.invalidateQueries({ queryKey: ['booking-stats'] });
@@ -340,7 +344,35 @@ export default function BookingsScreen() {
     setRefreshing(false);
   }, [queryClient]);
 
+  const hasRedirectedRef = useRef(false);
+  
+  useEffect(() => {
+    // If user has multiple restaurants but none selected, redirect to selection (only once)
+    if (!restaurant && restaurants.length > 1 && !loading && !hasRedirectedRef.current) {
+      hasRedirectedRef.current = true;
+      router.replace('/(tabs)/select-restaurant');
+    }
+  }, [restaurant, restaurants.length, loading, router]);
+
   if (!restaurant) {
+    if (loading) {
+      return (
+        <View className="flex-1 bg-background justify-center items-center p-4">
+          <ActivityIndicator size="large" color="#792339" />
+          <Text className="text-gray mt-4">Loading restaurant...</Text>
+        </View>
+      );
+    }
+    
+    if (restaurants.length > 1) {
+      return (
+        <View className="flex-1 bg-background justify-center items-center p-4">
+          <ActivityIndicator size="large" color="#792339" />
+          <Text className="text-gray mt-4">Redirecting to restaurant selection...</Text>
+        </View>
+      );
+    }
+    
     return (
       <View className="flex-1 bg-background justify-center items-center p-4">
         <MaterialIcons name="store" size={64} color="#d9c3db" />
@@ -365,32 +397,8 @@ export default function BookingsScreen() {
                 <Text className="text-background text-xs">Battery</Text>
               </TouchableOpacity>
             )}
-            {isServiceRunning && (
-              <View className="bg-green-500/30 rounded-full px-2 py-1 flex-row items-center gap-1">
-                <View className="w-2 h-2 rounded-full bg-green-400" />
-                <Text className="text-background text-xs">Service Active</Text>
-              </View>
-            )}
             <TouchableOpacity className="bg-background/20 rounded-full p-2" onPress={() => setShowAnalytics(!showAnalytics)}>
               <MaterialIcons name={showAnalytics ? "expand-less" : "expand-more"} size={24} color="#ffece2" />
-            </TouchableOpacity>
-            <TouchableOpacity 
-              className="bg-red-500/30 rounded-full px-3 py-1 ml-1"
-              onPress={() => {
-                console.log('🔊 Testing sound...');
-                startPersistentAlert('test-booking-id');
-                setTimeout(() => {
-                  Alert.alert(
-                    'Sound Test',
-                    'Is the sound playing?',
-                    [
-                      { text: 'Stop', onPress: () => stopPersistentAlert('test-booking-id') }
-                    ]
-                  );
-                }, 500);
-              }}
-            >
-              <Text className="text-background text-xs font-bold">Test Sound</Text>
             </TouchableOpacity>
           </View>
         </View>

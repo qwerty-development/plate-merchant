@@ -1,18 +1,22 @@
 /**
  * Firebase Cloud Messaging (FCM) Service
  *
- * This service handles:
- * 1. FCM token registration and updates
- * 2. Storing tokens in Supabase for backend to send messages
- * 3. Background message handling
- * 4. Triggering notifications and sounds when FCM messages arrive
+ * This service handles FCM for production builds.
+ * In Expo Go, we use Expo push notifications instead.
  */
 
 import { supabase } from '@/lib/supabase';
-import messaging from '@react-native-firebase/messaging';
 import { Platform } from 'react-native';
-import { stopBookingAlert, triggerBookingAlert } from './booking-alert-manager';
-import { startPersistentAlert, stopPersistentAlert } from './persistent-audio-manager';
+import { stopBookingAlert } from './booking-alert-manager';
+import { BookingNotificationData, cancelBookingNotification, displayNewBookingNotification } from './booking-notification-service';
+
+// Safely import Firebase - may not be available in Expo Go
+let messaging: any = null;
+try {
+  messaging = require('@react-native-firebase/messaging').default;
+} catch (error) {
+  console.warn('⚠️ [FCM] Firebase not available (OK in Expo Go). Using Expo push notifications.');
+}
 
 /**
  * Request notification permissions and get FCM token
@@ -24,10 +28,14 @@ export async function requestNotificationPermissionAndGetToken(): Promise<string
     return null;
   }
 
+  if (!messaging) {
+    console.log('⏭️ [FCM] Firebase not available, skipping');
+    return null;
+  }
+
   try {
     console.log('🔔 [FCM] Requesting notification permission...');
 
-    // Request permission (required for Android 13+)
     const authStatus = await messaging().requestPermission();
     const enabled =
       authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
@@ -40,7 +48,6 @@ export async function requestNotificationPermissionAndGetToken(): Promise<string
 
     console.log('✅ [FCM] Notification permission granted');
 
-    // Get FCM token
     const token = await messaging().getToken();
     console.log('🎫 [FCM] Token obtained:', token.substring(0, 20) + '...');
 
@@ -53,9 +60,10 @@ export async function requestNotificationPermissionAndGetToken(): Promise<string
 
 /**
  * Register FCM token in Supabase for this device
- * Links the token to the current user and restaurant
  */
 export async function registerFCMToken(restaurantId: string) {
+  if (!messaging) return;
+
   try {
     const token = await requestNotificationPermissionAndGetToken();
     if (!token) {
@@ -65,14 +73,12 @@ export async function registerFCMToken(restaurantId: string) {
 
     console.log('📝 [FCM] Registering token in Supabase...');
 
-    // Get current user
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       console.error('❌ [FCM] No user found, cannot register token');
       return;
     }
 
-    // Upsert token in database
     const { error } = await supabase
       .from('device_tokens')
       .upsert({
@@ -85,7 +91,7 @@ export async function registerFCMToken(restaurantId: string) {
         },
         last_used_at: new Date().toISOString(),
       }, {
-        onConflict: 'fcm_token', // Update if token already exists
+        onConflict: 'fcm_token',
       });
 
     if (error) {
@@ -100,10 +106,12 @@ export async function registerFCMToken(restaurantId: string) {
 }
 
 /**
- * Handle token refresh (FCM tokens can change periodically)
+ * Handle token refresh
  */
 export function setupTokenRefreshListener(restaurantId: string) {
-  return messaging().onTokenRefresh(async (newToken) => {
+  if (!messaging) return () => {};
+
+  return messaging().onTokenRefresh(async (newToken: string) => {
     console.log('🔄 [FCM] Token refreshed:', newToken.substring(0, 20) + '...');
     await registerFCMToken(restaurantId);
   });
@@ -111,47 +119,56 @@ export function setupTokenRefreshListener(restaurantId: string) {
 
 /**
  * Background message handler
- * This function runs even when the app is COMPLETELY CLOSED
- * It's called by Firebase when FCM message arrives in background
+ * Only works in production builds, not Expo Go
  */
 export function setupBackgroundMessageHandler() {
-  messaging().setBackgroundMessageHandler(async (remoteMessage) => {
+  if (!messaging) {
+    console.log('⏭️ [FCM] Firebase not available, background handler not registered');
+    return;
+  }
+
+  messaging().setBackgroundMessageHandler(async (remoteMessage: any) => {
     console.log('📨 [FCM Background] Message received!', remoteMessage);
 
     try {
       const data = remoteMessage.data;
-
       if (!data) return;
 
       // Handle NEW BOOKING
-      if (data.type === 'new_booking') {
-        const bookingId = data.bookingId as string;
-        const guestName = data.guestName as string;
-        const partySize = parseInt(data.partySize as string) || 1;
-        const bookingTime = data.bookingTime as string;
+      if (data.type === 'NEW_BOOKING' || data.type === 'new_booking') {
+        const bookingId = String(data.booking_id || data.bookingId || '');
+        const guestName = String(data.guest_name || data.guestName || 'Guest');
+        const partySize = parseInt(String(data.guest_count || data.partySize || '1')) || 1;
+        const bookingTime = String(data.booking_time || data.bookingTime || '');
+        const restaurantId = String(data.restaurant_id || data.restaurantId || '');
 
         console.log('🎉 [FCM Background] New booking:', { bookingId, guestName, partySize });
 
-        // Start persistent audio alert
-        startPersistentAlert(bookingId).catch(err => {
-          console.error('❌ [FCM Background] Audio error:', err);
+        const notificationData: BookingNotificationData = {
+          booking_id: bookingId,
+          restaurant_id: restaurantId,
+          guest_name: guestName,
+          guest_count: partySize,
+          booking_time: bookingTime,
+        };
+        
+        await displayNewBookingNotification(notificationData).catch(err => {
+          console.error('❌ [FCM Background] Notification error:', err);
         });
 
-        // Trigger Notifee booking alert
-        triggerBookingAlert(bookingId, guestName, partySize, bookingTime).catch(err => {
-          console.error('❌ [FCM Background] Alert error:', err);
-        });
-
-        console.log('✅ [FCM Background] Notification and sound triggered');
+        console.log('✅ [FCM Background] Notification triggered');
       } 
-      // Handle BOOKING CANCELLED / HANDLED
-      else if (data.type === 'booking_cancelled' || data.type === 'booking_handled') {
-        const bookingId = data.bookingId as string;
-        console.log('🛑 [FCM Background] Booking cancelled/handled:', bookingId);
+      // Handle BOOKING STATUS CHANGED
+      else if (data.type === 'BOOKING_STATUS_CHANGED' || data.type === 'booking_cancelled' || data.type === 'booking_handled') {
+        const bookingId = String(data.booking_id || data.bookingId || '');
+        const status = String(data.status || '');
+        console.log('🛑 [FCM Background] Booking status changed:', bookingId, status);
         
         if (bookingId) {
-          await stopPersistentAlert(bookingId);
           await stopBookingAlert(bookingId);
+          if (status === 'confirmed' || status === 'declined_by_restaurant') {
+            await cancelBookingNotification(bookingId);
+          }
         }
       }
     } catch (error) {
@@ -164,46 +181,52 @@ export function setupBackgroundMessageHandler() {
 
 /**
  * Foreground message handler
- * This function runs when the app is OPEN and in foreground
  */
 export function setupForegroundMessageHandler() {
-  return messaging().onMessage(async (remoteMessage) => {
+  if (!messaging) return () => {};
+
+  return messaging().onMessage(async (remoteMessage: any) => {
     console.log('📨 [FCM Foreground] Message received!', remoteMessage);
 
     try {
       const data = remoteMessage.data;
-
       if (!data) return;
 
       // Handle NEW BOOKING
-      if (data.type === 'new_booking') {
-        const bookingId = data.bookingId as string;
-        const guestName = data.guestName as string;
-        const partySize = parseInt(data.partySize as string) || 1;
-        const bookingTime = data.bookingTime as string;
+      if (data.type === 'NEW_BOOKING' || data.type === 'new_booking') {
+        const bookingId = String(data.booking_id || data.bookingId || '');
+        const guestName = String(data.guest_name || data.guestName || 'Guest');
+        const partySize = parseInt(String(data.guest_count || data.partySize || '1')) || 1;
+        const bookingTime = String(data.booking_time || data.bookingTime || '');
+        const restaurantId = String(data.restaurant_id || data.restaurantId || '');
 
         console.log('🎉 [FCM Foreground] New booking:', { bookingId, guestName, partySize });
 
-        // Start persistent audio alert
-        startPersistentAlert(bookingId).catch(err => {
-          console.error('❌ [FCM Foreground] Audio error:', err);
+        const notificationData: BookingNotificationData = {
+          booking_id: bookingId,
+          restaurant_id: restaurantId,
+          guest_name: guestName,
+          guest_count: partySize,
+          booking_time: bookingTime,
+        };
+        
+        await displayNewBookingNotification(notificationData).catch(err => {
+          console.error('❌ [FCM Foreground] Notification error:', err);
         });
 
-        // Trigger Notifee booking alert
-        triggerBookingAlert(bookingId, guestName, partySize, bookingTime).catch(err => {
-          console.error('❌ [FCM Foreground] Alert error:', err);
-        });
-
-        console.log('✅ [FCM Foreground] Notification and sound triggered');
+        console.log('✅ [FCM Foreground] Notification triggered');
       }
-      // Handle BOOKING CANCELLED / HANDLED
-      else if (data.type === 'booking_cancelled' || data.type === 'booking_handled') {
-        const bookingId = data.bookingId as string;
-        console.log('🛑 [FCM Foreground] Booking cancelled/handled:', bookingId);
+      // Handle BOOKING STATUS CHANGED
+      else if (data.type === 'BOOKING_STATUS_CHANGED' || data.type === 'booking_cancelled' || data.type === 'booking_handled') {
+        const bookingId = String(data.booking_id || data.bookingId || '');
+        const status = String(data.status || '');
+        console.log('🛑 [FCM Foreground] Booking status changed:', bookingId, status);
         
         if (bookingId) {
-          await stopPersistentAlert(bookingId);
           await stopBookingAlert(bookingId);
+          if (status === 'confirmed' || status === 'declined_by_restaurant') {
+            await cancelBookingNotification(bookingId);
+          }
         }
       }
     } catch (error) {
@@ -214,10 +237,6 @@ export function setupForegroundMessageHandler() {
 
 /**
  * Initialize FCM service
- * Call this when user is authenticated and restaurant is loaded
- *
- * NOTE: Background message handler should be set up at module level in _layout.tsx,
- * NOT here, to avoid registering it multiple times.
  */
 export function initializeFCM(restaurantId: string) {
   if (Platform.OS !== 'android') {
@@ -225,20 +244,19 @@ export function initializeFCM(restaurantId: string) {
     return () => {};
   }
 
+  if (!messaging) {
+    console.log('⏭️ [FCM] Firebase not available, skipping initialization');
+    return () => {};
+  }
+
   console.log('🚀 [FCM] Initializing FCM service for restaurant:', restaurantId);
 
-  // Setup foreground handler (for when app is open)
   const unsubscribeForeground = setupForegroundMessageHandler();
-
-  // Setup token refresh listener
   const unsubscribeTokenRefresh = setupTokenRefreshListener(restaurantId);
-
-  // Register token
   registerFCMToken(restaurantId);
 
   console.log('✅ [FCM] FCM service initialized');
 
-  // Return cleanup function
   return () => {
     unsubscribeForeground();
     unsubscribeTokenRefresh();
@@ -253,6 +271,14 @@ export async function checkFCMStatus(): Promise<{
   hasToken: boolean;
   token: string | null;
 }> {
+  if (!messaging) {
+    return {
+      hasPermission: false,
+      hasToken: false,
+      token: null,
+    };
+  }
+
   try {
     const authStatus = await messaging().hasPermission();
     const hasPermission =

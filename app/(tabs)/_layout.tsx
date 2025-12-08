@@ -7,7 +7,6 @@ import { HapticTab } from '@/components/haptic-tab';
 export default function TabLayout() {
   return (
     <Tabs
-      initialRouteName="bookings"
       screenOptions={{
         tabBarActiveTintColor: '#792339', // Primary brand color
         tabBarInactiveTintColor: '#787878', // Gray color
@@ -41,6 +40,12 @@ export default function TabLayout() {
       />
       <Tabs.Screen
         name="explore"
+        options={{
+          href: null, // Hide from tabs
+        }}
+      />
+      <Tabs.Screen
+        name="select-restaurant"
         options={{
           href: null, // Hide from tabs
         }}

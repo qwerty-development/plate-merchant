@@ -1,88 +1,36 @@
 /**
- * Booking Alert Manager - Native notification system using Notifee
- * This ensures alerts work even when app is backgrounded or screen is off
+ * Booking Alert Manager
+ * Simple wrapper using expo-notifications
  */
 
-import notifee, {
-  AndroidImportance,
-  AndroidVisibility,
-  AndroidCategory,
-  EventType,
-  Event,
-} from '@notifee/react-native';
+import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-const BOOKING_CHANNEL_ID = 'booking-alerts-critical';
-const ACTIVE_BOOKINGS = new Set<string>();
+const CHANNEL_ID = 'booking-alerts-critical';
 
-/**
- * Initialize the booking alert notification channel
- * MUST be called at app startup
- */
 export async function initializeBookingAlerts() {
   if (Platform.OS !== 'android') return;
 
   try {
-    console.log('🔔 [BookingAlerts] Initializing booking alert channel...');
-
-    // Create HIGH PRIORITY channel for booking alerts
-    await notifee.createChannel({
-      id: BOOKING_CHANNEL_ID,
+    await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
       name: 'Booking Alerts',
       description: 'Critical alerts for new booking requests',
-      importance: AndroidImportance.HIGH, // HIGH = shows as heads-up notification
-      sound: 'default', // Use default notification sound (custom sounds require native setup)
-      vibration: true,
-      vibrationPattern: [500, 500, 500, 500], // Strong vibration pattern
-      lights: true,
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 500, 200, 500, 200, 500],
       lightColor: '#792339',
-      bypassDnd: true, // Bypass Do Not Disturb mode
+      sound: 'new_booking.wav',
+      enableVibrate: true,
+      enableLights: true,
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      bypassDnd: true,
+      showBadge: true,
     });
-
-    console.log('✅ [BookingAlerts] Booking alert channel created');
-
-    // Set up notification event handlers
-    notifee.onForegroundEvent(handleNotificationEvent);
-    notifee.onBackgroundEvent(handleNotificationEvent);
-
+    console.log('✅ [BookingAlerts] Channel created');
   } catch (error) {
-    console.error('❌ [BookingAlerts] Error initializing:', error);
+    console.error('❌ [BookingAlerts] Error:', error);
   }
 }
 
-/**
- * Handle notification actions (Accept/Decline from notification)
- */
-async function handleNotificationEvent({ type, detail }: Event) {
-  const { notification, pressAction } = detail;
-
-  console.log('📱 [BookingAlerts] Event:', type, 'Action:', pressAction?.id);
-
-  if (type === EventType.PRESS) {
-    // User tapped the notification - open app to bookings screen
-    console.log('👆 [BookingAlerts] Notification tapped, opening app...');
-  } else if (type === EventType.ACTION_PRESS && pressAction?.id) {
-    const bookingId = notification?.data?.bookingId as string;
-
-    if (pressAction.id === 'accept' && bookingId) {
-      console.log('✅ [BookingAlerts] Accept action for booking:', bookingId);
-      // TODO: Call accept booking API
-      await stopBookingAlert(bookingId);
-    } else if (pressAction.id === 'decline' && bookingId) {
-      console.log('❌ [BookingAlerts] Decline action for booking:', bookingId);
-      // TODO: Call decline booking API
-      await stopBookingAlert(bookingId);
-    }
-  } else if (type === EventType.DISMISSED) {
-    // Notification was dismissed - but booking is still pending
-    console.log('👋 [BookingAlerts] Notification dismissed');
-  }
-}
-
-/**
- * Trigger a booking alert notification
- * This works even when app is backgrounded or screen is off
- */
 export async function triggerBookingAlert(
   bookingId: string,
   guestName: string,
@@ -92,139 +40,52 @@ export async function triggerBookingAlert(
   if (Platform.OS !== 'android') return;
 
   try {
-    console.log('🚨 [BookingAlerts] Triggering alert for booking:', bookingId);
-
-    // Add to active bookings set
-    ACTIVE_BOOKINGS.add(bookingId);
-
-    // Create notification with actions
-    await notifee.displayNotification({
-      id: `booking-${bookingId}`,
-      title: '🎉 New Booking Request!',
-      body: `${guestName} • ${partySize} ${partySize === 1 ? 'guest' : 'guests'}${bookingTime ? ` • ${bookingTime}` : ''}`,
-      data: {
-        bookingId,
-        type: 'booking_alert',
+    await Notifications.scheduleNotificationAsync({
+      identifier: `booking-${bookingId}`,
+      content: {
+        title: '🎉 New Booking Request!',
+        body: `${guestName} • ${partySize} ${partySize === 1 ? 'guest' : 'guests'}${bookingTime ? ` • ${bookingTime}` : ''}`,
+        data: { bookingId, type: 'booking_alert' },
+        sound: 'new_booking.wav',
+        priority: Notifications.AndroidNotificationPriority.MAX,
+        categoryIdentifier: 'BOOKING_ACTION',
+        badge: 1,
       },
-      android: {
-        channelId: BOOKING_CHANNEL_ID,
-        importance: AndroidImportance.HIGH,
-
-        // Make it persistent and attention-grabbing
-        ongoing: false, // User can dismiss, but we'll re-alert
-        autoCancel: false, // Stays until handled
-        category: AndroidCategory.ALARM,
-        visibility: AndroidVisibility.PUBLIC,
-
-        // Sound and vibration (will use channel's default sound)
-        vibrationPattern: [0, 500, 500, 500, 500, 500],
-
-        // Full screen intent - wakes up screen
-        fullScreenAction: {
-          id: 'default',
-          launchActivity: 'default',
-        },
-
-        // Heads-up notification
-        showTimestamp: true,
-        timestamp: Date.now(),
-
-        // Color and style
-        color: '#792339',
-        smallIcon: 'ic_notification', // Falls back to ic_launcher if not found
-
-        // Action buttons
-        actions: [
-          {
-            title: '✅ Accept',
-            pressAction: {
-              id: 'accept',
-              launchActivity: 'default',
-            },
-          },
-          {
-            title: '❌ Decline',
-            pressAction: {
-              id: 'decline',
-              launchActivity: 'default',
-            },
-          },
-        ],
-      },
+      trigger: null,
     });
-
-    console.log('✅ [BookingAlerts] Alert notification displayed');
-
-    // Set up repeating alert if not handled within 10 seconds
-    setTimeout(() => {
-      if (ACTIVE_BOOKINGS.has(bookingId)) {
-        console.log('⏰ [BookingAlerts] Re-alerting for booking:', bookingId);
-        triggerBookingAlert(bookingId, guestName, partySize, bookingTime);
-      }
-    }, 10000); // Re-alert every 10 seconds
-
   } catch (error) {
-    console.error('❌ [BookingAlerts] Error triggering alert:', error);
+    console.error('❌ [BookingAlerts] Error:', error);
   }
 }
 
-/**
- * Stop the booking alert for a specific booking
- */
 export async function stopBookingAlert(bookingId: string) {
   if (Platform.OS !== 'android') return;
-
   try {
-    console.log('🛑 [BookingAlerts] Stopping alert for booking:', bookingId);
-
-    // Remove from active set
-    ACTIVE_BOOKINGS.delete(bookingId);
-
-    // Cancel the notification
-    await notifee.cancelNotification(`booking-${bookingId}`);
-
-    console.log('✅ [BookingAlerts] Alert stopped');
+    await Notifications.dismissNotificationAsync(`booking-${bookingId}`);
+    await Notifications.cancelScheduledNotificationAsync(`booking-${bookingId}`);
   } catch (error) {
-    console.error('❌ [BookingAlerts] Error stopping alert:', error);
+    console.error('❌ [BookingAlerts] Error:', error);
   }
 }
 
-/**
- * Stop all booking alerts
- */
 export async function stopAllBookingAlerts() {
   if (Platform.OS !== 'android') return;
-
   try {
-    console.log('🛑 [BookingAlerts] Stopping all alerts');
-
-    // Clear the active set
-    ACTIVE_BOOKINGS.clear();
-
-    // Cancel all booking notifications
-    const notifications = await notifee.getDisplayedNotifications();
-    for (const notification of notifications) {
-      if (notification.id?.startsWith('booking-')) {
-        await notifee.cancelNotification(notification.id);
+    const notifications = await Notifications.getPresentedNotificationsAsync();
+    for (const n of notifications) {
+      if (n.request.identifier?.startsWith('booking-')) {
+        await Notifications.dismissNotificationAsync(n.request.identifier);
       }
     }
-
-    console.log('✅ [BookingAlerts] All alerts stopped');
   } catch (error) {
-    console.error('❌ [BookingAlerts] Error stopping alerts:', error);
+    console.error('❌ [BookingAlerts] Error:', error);
   }
 }
 
-/**
- * Get count of active booking alerts
- */
 export function getActiveBookingAlertsCount(): number {
-  return ACTIVE_BOOKINGS.size;
+  return 0; // Simplified
 }
 
-/**
- * Check if a booking has an active alert
- */
 export function hasActiveAlert(bookingId: string): boolean {
-  return ACTIVE_BOOKINGS.has(bookingId);
+  return false; // Simplified
 }

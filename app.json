@@ -61,7 +61,6 @@
     },
     "plugins": [
       "expo-router",
-      "./plugins/withNotifee.js",
       "@react-native-firebase/app",
       [
         "expo-splash-screen",

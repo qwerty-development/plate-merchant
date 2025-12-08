@@ -13,6 +13,7 @@ import { DietaryOption } from '@/types/database';
 import { MaterialIcons } from '@expo/vector-icons';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import {
@@ -60,8 +61,9 @@ const DIETARY_OPTIONS: DietaryOption[] = [
 
 export default function ManageScreen() {
   const { user, signOut } = useAuth();
-  const { restaurant, refetch } = useRestaurant();
+  const { restaurant, restaurants, refetch } = useRestaurant();
   const queryClient = useQueryClient();
+  const router = useRouter();
   
   const [expandedSection, setExpandedSection] = useState<Section>(null);
   const [savingSection, setSavingSection] = useState<Section>(null);
@@ -253,6 +255,29 @@ export default function ManageScreen() {
             {restaurant.name}
           </Text>
         </View>
+
+        {/* Restaurant Selector - Show if user has multiple restaurants */}
+        {restaurants.length > 1 && (
+          <View className="bg-white rounded-2xl border border-lavender mb-4 overflow-hidden">
+            <TouchableOpacity
+              className="p-4 flex-row items-center justify-between"
+              onPress={() => router.push('/(tabs)/select-restaurant')}
+            >
+              <View className="flex-row items-center flex-1">
+                <MaterialIcons name="store" size={24} color="#792339" />
+                <View className="ml-3 flex-1">
+                  <Text className="text-primary text-lg font-semibold">
+                    Switch Restaurant
+                  </Text>
+                  <Text className="text-gray text-sm mt-1">
+                    {restaurants.length} restaurant{restaurants.length > 1 ? 's' : ''} available
+                  </Text>
+                </View>
+              </View>
+              <MaterialIcons name="chevron-right" size={24} color="#787878" />
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* General Information Section */}
         <View className="bg-white rounded-2xl border border-lavender mb-4 overflow-hidden">

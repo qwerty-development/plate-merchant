@@ -1,3 +1,4 @@
+import { BookingNotificationData, displayNewBookingNotification, handleNotificationAction } from '@/services/booking-notification-service';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { useEffect, useRef, useState } from 'react';
@@ -36,16 +37,40 @@ export function usePushNotifications() {
     });
 
     // Listener for when notification is received while app is in foreground
-    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
+    notificationListener.current = Notifications.addNotificationReceivedListener(async (notification) => {
       console.log('🔔 Notification received:', notification);
       setNotification(notification);
+      
+      // Route NEW_BOOKING notifications to booking notification service
+      const data = notification.request.content.data;
+      if (data && (data.type === 'NEW_BOOKING' || data.type === 'new_booking') && Platform.OS === 'android') {
+        const notificationData: BookingNotificationData = {
+          booking_id: String(data.booking_id || data.bookingId || ''),
+          restaurant_id: String(data.restaurant_id || data.restaurantId || ''),
+          guest_name: String(data.guest_name || data.guestName || 'Guest'),
+          guest_count: parseInt(String(data.guest_count || data.partySize || '1')) || 1,
+          booking_time: String(data.booking_time || data.bookingTime || ''),
+        };
+        
+        // Display notification
+        await displayNewBookingNotification(notificationData).catch(err => {
+          console.error('❌ Error displaying notification:', err);
+        });
+      }
     });
 
-    // Listener for when user taps on notification
-    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
+    // Listener for when user taps on notification or action button
+    responseListener.current = Notifications.addNotificationResponseReceivedListener(async (response) => {
       console.log('👆 Notification tapped:', response);
-      // Handle navigation based on notification data
       const data = response.notification.request.content.data;
+      const actionIdentifier = response.actionIdentifier;
+      
+      // Handle action buttons (Accept/Decline)
+      if (actionIdentifier && (actionIdentifier === 'ACCEPT' || actionIdentifier === 'DECLINE')) {
+        await handleNotificationAction(actionIdentifier, data);
+      }
+      
+      // Handle navigation based on notification data
       console.log('Notification data:', data);
     });
 

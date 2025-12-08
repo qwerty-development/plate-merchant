@@ -11,25 +11,27 @@ import { AuthProvider, useAuth } from '@/contexts/auth-context';
 import { RestaurantProvider } from '@/contexts/restaurant-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { initializeBookingAlerts } from '@/services/booking-alert-manager';
+import { setupNotificationChannels } from '@/services/booking-notification-service';
 import { setupBackgroundMessageHandler } from '@/services/fcm-service';
-import { setupPersistentAudio } from '@/services/persistent-audio-manager';
 import { ActivityIndicator, View } from 'react-native';
 
 // Initialize notification systems at module load (before any React components render)
 if (Platform.OS === 'android') {
-  // Initialize persistent audio with native Sound library
-  setupPersistentAudio().catch(error => {
-    console.error('❌ Failed to setup persistent audio:', error);
-  });
-
-  // Initialize Notifee booking alert channels
+  // Initialize expo-notifications channels
   initializeBookingAlerts().catch(error => {
     console.error('❌ Failed to initialize booking alerts:', error);
   });
 
-  // Setup FCM background message handler
-  // This MUST be called outside of React components
-  setupBackgroundMessageHandler();
+  setupNotificationChannels().catch(error => {
+    console.error('❌ Failed to setup notification channels:', error);
+  });
+
+  // Setup FCM background message handler (optional - only works in production builds)
+  try {
+    setupBackgroundMessageHandler();
+  } catch (error) {
+    console.warn('⚠️ FCM background handler not available (OK in Expo Go):', error);
+  }
 
   console.log('✅ Notification systems initialized');
 }
@@ -48,12 +50,12 @@ export const unstable_settings = {
 };
 
 function RootLayoutNav() {
-  const { user, loading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
-    if (loading) return;
+    if (authLoading) return;
 
     const inAuthGroup = segments[0] === '(auth)';
 
@@ -62,11 +64,12 @@ function RootLayoutNav() {
       router.replace('/(auth)/login');
     } else if (user && inAuthGroup) {
       // Redirect to bookings tab when user is authenticated
+      // Restaurant selection will be handled by the select-restaurant screen
       router.replace('/(tabs)/bookings');
     }
-  }, [user, loading, segments]);
+  }, [user, authLoading, segments]);
 
-  if (loading) {
+  if (authLoading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" />
